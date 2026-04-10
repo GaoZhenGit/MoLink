@@ -1,0 +1,33 @@
+# Maven
+target/
+
+# Build outputs
+*.jar
+*.war
+*.ear
+*.zip
+*.tar
+*.tar.gz
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.bak
+*.swp
