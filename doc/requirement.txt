@@ -19,5 +19,5 @@
 - worker提供socks5协议的网络代理接口，内网应用通过该代理连接互联网
 
 要求/注意事项：
-- access使用springboot作为框架编写代码，使用纯java开发，支持java8，使用dadb库开发
-- worker使用Android框架开发，使用纯java开发
+- access使用springboot作为框架编写代码，使用纯java开发，支持jdk8环境运行，使用dadb库开发
+- worker使用Android框架开发，使用纯java开发，不要改gradle、agp、android框架版本
