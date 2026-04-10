@@ -1,4 +1,4 @@
-﻿# MoLink E2E Test Script
+# MoLink E2E Test Script
 param(
     [int]$AccessPort = 1080,
     [int]$AdbTimeout = 10,
@@ -29,7 +29,7 @@ function step-fail($step, $desc) {
 }
 
 function Invoke-CmdWithTimeout {
-    param($Name, $ScriptBlock, $TimeoutSec, $ArgumentList = @())
+    param($Name, $ScriptBlock, $TimeoutSec, $ArgumentList = @(), [switch]$Silent)
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
     $waitResult = Wait-Job -Job $job -Timeout $TimeoutSec
@@ -124,31 +124,38 @@ $step = "2"
 $t = Get-Date
 Write-Host "[$step] Stop access service..." -ForegroundColor Cyan
 
-$r = Invoke-CmdWithTimeout -Name "jps" -TimeoutSec $StopTimeout -ScriptBlock {
+# 使用 jps + Select-String 找到 molink-access 进程并停止
+$accessPid = $null
+$r = Invoke-CmdWithTimeout -Name "jps_l" -TimeoutSec 5 -ScriptBlock {
     jps -l 2>&1
 }
 $jpsOut = $r.Output -join "`n"
-$jpsOut | Out-File "$LogsDir\jps.log" -Encoding UTF8
+$jpsOut | Write-Host
 
-if ($jpsOut -match 'com\.molink\.access\.AccessApplication') {
-    $apid = ($jpsOut -split '\s+')[0].Trim()
-    info "Stopping access PID=$apid"
-    Stop-Process -Id $apid -Force -ErrorAction SilentlyContinue
+foreach ($line in $r.Output) {
+    $trimmed = $line.Trim()
+    if ($trimmed -match 'com\.molink\.access\.AccessApplication') {
+        $parts = $trimmed -split '\s+'
+        $accessPid = $parts[0]
+        break
+    }
+}
+
+if ($accessPid) {
+    info "Stopping access PID=$accessPid"
+    Stop-Process -Id $accessPid -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     pass "Access stopped"
 } else {
     info "No running access process found"
 }
 
-# Also kill any java processes that may hold the jar file
-Get-Process java -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*molink*' } | Stop-Process -Force -ErrorAction SilentlyContinue
-
 Write-Host "[$step] Stop worker service..." -ForegroundColor Cyan
 $r = Invoke-CmdWithTimeout -Name "stop_worker" -TimeoutSec $StopTimeout -ScriptBlock {
     param($d) adb -s $d shell am force-stop com.molink.worker 2>&1
 } -ArgumentList @($script:device)
-"$($r.Output)" | Out-File "$LogsDir\stop_worker.log" -Encoding UTF8
-info "Worker service stopped"
+$swOut = ($r.Output -join "`n").Trim()
+info "Worker: $swOut"
 step-ok $step "Old services stopped" $t
 
 # Step 3: Build worker
@@ -160,14 +167,14 @@ info "CMD: gradle (timeout=${BuildTimeout}s)"
 $r = Invoke-CmdWithTimeout -Name "gradle" -TimeoutSec $BuildTimeout -ScriptBlock {
     param($dir)
     Push-Location $dir
-    $result = & .\gradlew.bat assembleDebug 2>&1
+    $result = & .\gradlew.bat clean assembleDebug --no-daemon 2>&1
     Pop-Location
     return $result
 } -ArgumentList @($WorkerDir)
-info "done: elapsed=$([int]$r.Elapsed.TotalSeconds)s  timedOut=$($r.TimedOut)"
 
 $buildOut = $r.Output -join "`n"
-$buildOut | Out-File "$LogsDir\worker-build.log" -Encoding UTF8
+$buildOut | Write-Host          # 打印到控制台
+info "done: elapsed=$([int]$r.Elapsed.TotalSeconds)s  timedOut=$($r.TimedOut)"
 
 if ($r.TimedOut) {
     step-fail $step "worker build timeout"
@@ -192,14 +199,14 @@ info "CMD: mvn (timeout=${BuildTimeout}s)"
 $r = Invoke-CmdWithTimeout -Name "maven" -TimeoutSec $BuildTimeout -ScriptBlock {
     param($dir)
     Push-Location $dir
-    $result = & mvn package -DskipTests 2>&1
+    $result = & mvn clean package -DskipTests 2>&1
     Pop-Location
     return $result
 } -ArgumentList @($AccessDir)
-info "done: elapsed=$([int]$r.Elapsed.TotalSeconds)s  timedOut=$($r.TimedOut)"
 
 $mvnOut = $r.Output -join "`n"
-$mvnOut | Out-File "$LogsDir\access-build.log" -Encoding UTF8
+$mvnOut | Write-Host          # 打印到控制台
+info "done: elapsed=$([int]$r.Elapsed.TotalSeconds)s  timedOut=$($r.TimedOut)"
 
 if ($r.TimedOut) {
     step-fail $step "access build timeout"
@@ -226,9 +233,8 @@ if (Test-Path $apkPath) {
     $r = Invoke-CmdWithTimeout -Name "install_apk" -TimeoutSec $InstallTimeout -ScriptBlock {
         param($d, $a) adb -s $d install -r $a 2>&1
     } -ArgumentList @($script:device, $apkPath)
-    $r.Output | Out-File "$LogsDir\worker-install.log" -Encoding UTF8
     $installResult = ($r.Output -join "`n").Trim()
-    info "APK install: $installResult"
+    info "APK install: $installResult"   # 安装结果打印到控制台
 
     # 启动 MainActivity 使组件注册，再通过 ADB 启动服务
     info "Launching MainActivity to register components..."
@@ -250,10 +256,10 @@ info "Worker start: $workerStartOut"
 info "Waiting ${ServiceWait}s..."
 Start-Sleep -Seconds $ServiceWait
 
+# 启动 access - Start-Process java 直接启动，新窗口显示
 info "Starting access..."
-$accessLogFile = "$LogsDir\access.log"
-$javaCmd = "java -jar `"$AccessJar`" 2>&1 | Out-File -FilePath `"$accessLogFile`" -Encoding UTF8"
-$accessProc = Start-Process powershell.exe -ArgumentList "-NoExit","-Command",$javaCmd -PassThru -WindowStyle Normal
+$accessProc = Start-Process java -ArgumentList "-Dfile.encoding=GBK", "-jar", $AccessJar -PassThru -WindowStyle Normal
+Start-Sleep -Seconds 5
 Start-Sleep -Seconds 5
 
 if ($accessProc.HasExited) {
@@ -262,6 +268,24 @@ if ($accessProc.HasExited) {
     $script:exitCode = 1
 } else {
     info "access started (PID: $($accessProc.Id))"
+
+    # 等待 access Spring Boot 真正就绪（端口可响应）
+    info "Waiting for access API ready..."
+    $apiReady = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Seconds 1
+        $tcp = Test-NetConnection -ComputerName localhost -Port 8080 -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+        if ($tcp.TcpTestSucceeded) {
+            $apiReady = $true
+            break
+        }
+    }
+    if ($apiReady) {
+        info "access API ready"
+    } else {
+        info "access API not ready in time, continuing anyway"
+    }
+
     step-ok $step "services started" $t
 }
 
@@ -281,14 +305,18 @@ if (-not [string]::IsNullOrWhiteSpace($rawPid) -and $rawPid -ne "-1" -and $rawPi
     $r2 = Invoke-CmdWithTimeout -Name "logcat_pid" -TimeoutSec $LogcatTimeout -ScriptBlock {
         param($d, $wpid) adb -s $d logcat -d --pid=$wpid 2>&1
     } -ArgumentList @($script:device, $rawPid)
-    ($r2.Output -join "`n") | Out-File "$LogsDir\worker.log" -Encoding UTF8
+    $workerLog = $r2.Output -join "`n"
+    $workerLog | Out-File "$LogsDir\worker.log" -Encoding UTF8
+    $workerLog | Write-Host    # 打印到控制台
     info "logcat collected (PID filter)"
 } else {
     info "PID not found, using tag filter..."
     $r2 = Invoke-CmdWithTimeout -Name "logcat_tag" -TimeoutSec $LogcatTimeout -ScriptBlock {
         param($d) adb -s $d logcat -d -s MolinkWorker:S Socks5ProxyService:V *:S 2>&1
     } -ArgumentList @($script:device)
-    ($r2.Output -join "`n") | Out-File "$LogsDir\worker.log" -Encoding UTF8
+    $workerLog = $r2.Output -join "`n"
+    $workerLog | Out-File "$LogsDir\worker.log" -Encoding UTF8
+    $workerLog | Write-Host    # 打印到控制台
     info "logcat collected (tag filter)"
 }
 step-ok $step "logcat collected" $t
@@ -305,15 +333,12 @@ $proxyUrl = "socks5://127.0.0.1:$AccessPort"
 Write-Host "  [7a] Direct connection test (no proxy)..." -ForegroundColor Gray
 $directOk = $false
 foreach ($url in $testUrls) {
-    $safeName = $url.Replace('http://','').Replace('/','-').Replace('.','_')
-    $directFile = "$LogsDir\direct_${safeName}.log"
-
     $r = Invoke-CmdWithTimeout -Name "curl_direct" -TimeoutSec 20 -ScriptBlock {
         param($u, $t) curl.exe $u --max-time $t -s -w "`nHTTP_CODE:%{http_code}`nTIME:%{time_total}" 2>&1
     } -ArgumentList @($url, 15)
 
     $directOut = $r.Output -join "`n"
-    $directOut | Out-File $directFile -Encoding UTF8
+    $directOut | Write-Host   # 打印到控制台
 
     if ($directOut -match 'HTTP_CODE:200' -or $directOut -match '"origin"' -or $directOut -match '\d+\.\d+\.\d+\.\d+') {
         pass "Direct OK: $url"
@@ -337,15 +362,12 @@ $proxyOk = $false
 
 foreach ($url in $testUrls) {
     info "Testing: curl.exe -x $proxyUrl $url"
-    $safeName = $url.Replace('http://','').Replace('/','-').Replace('.','_')
-    $curlFile = "$LogsDir\proxy_${safeName}.log"
-
     $r = Invoke-CmdWithTimeout -Name "curl_test" -TimeoutSec ($ProxyTimeout + 10) -ScriptBlock {
         param($u, $p, $t) curl.exe -x $p $u --max-time $t -s -w "`nHTTP_CODE:%{http_code}`nTIME:%{time_total}" 2>&1
     } -ArgumentList @($url, $proxyUrl, $ProxyTimeout)
 
     $curlOut = $r.Output -join "`n"
-    $curlOut | Out-File $curlFile -Encoding UTF8
+    $curlOut | Write-Host   # 打印到控制台
 
     if ($curlOut -match 'HTTP_CODE:200' -or $curlOut -match '"origin"' -or $curlOut -match '\d+\.\d+\.\d+\.\d+') {
         pass "Proxy OK: $url"
