@@ -1,1 +1,19 @@
-.worktrees/
+# MoLink Root
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+target\
+build\
+molink-worker\.gradle\
+molink-worker\build\
+molink-worker\app\build\
