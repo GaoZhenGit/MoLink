@@ -3,6 +3,8 @@ package com.molink.access;
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.AppConfig;
 import com.molink.access.forwarder.PortForwarder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -13,13 +15,14 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AccessApplication {
 
+    private static final Logger log = LoggerFactory.getLogger(AccessApplication.class);
+
     public static void main(String[] args) {
         SpringApplication.run(AccessApplication.class, args);
     }
 
     @Bean
     public AppConfig appConfig() {
-        // 从系统属性获取参数（由启动脚本设置）
         int localPort = Integer.parseInt(System.getProperty("molink.local.port", "1080"));
         int remotePort = Integer.parseInt(System.getProperty("molink.remote.port", "1080"));
         int apiPort = Integer.parseInt(System.getProperty("molink.api.port", "8080"));
@@ -41,15 +44,14 @@ public class AccessApplication {
     @Bean
     public CommandLineRunner runner(AppConfig config, AdbClientManager adbClient, PortForwarder portForwarder) {
         return args -> {
-            System.out.println("=== MoLink Access ===");
-            System.out.println("本地端口: " + config.getLocalPort());
-            System.out.println("远端端口: " + config.getRemotePort());
-            System.out.println("API 端口: " + config.getApiPort());
-            System.out.println();
+            log.info("=== MoLink Access 启动 ===");
+            log.info("本地端口: {}", config.getLocalPort());
+            log.info("远端端口: {}", config.getRemotePort());
+            log.info("API 端口: {}", config.getApiPort());
 
             // 连接 ADB
             if (!adbClient.connect()) {
-                System.err.println("ADB 连接失败，程序退出");
+                log.error("ADB 连接失败，程序退出");
                 System.exit(1);
             }
 
@@ -58,15 +60,13 @@ public class AccessApplication {
 
             // 启动端口转发
             try {
-                portForwarder.start();  // 建立 ADB 端口转发并监听
+                portForwarder.start();
             } catch (Exception e) {
-                System.err.println("端口转发启动失败: " + e.getMessage());
-                e.printStackTrace();
+                log.error("端口转发启动失败: {}", e.getMessage(), e);
                 System.exit(1);
             }
 
-            System.out.println();
-            System.out.println("服务已启动，可通过 http://localhost:" + config.getApiPort() + "/api/status 查看状态");
+            log.info("服务已启动，可通过 http://localhost:{}/api/status 查看状态", config.getApiPort());
         };
     }
 }

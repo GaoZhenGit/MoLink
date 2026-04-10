@@ -229,6 +229,13 @@ if (Test-Path $apkPath) {
     $r.Output | Out-File "$LogsDir\worker-install.log" -Encoding UTF8
     $installResult = ($r.Output -join "`n").Trim()
     info "APK install: $installResult"
+
+    # 启动 MainActivity 使组件注册，再通过 ADB 启动服务
+    info "Launching MainActivity to register components..."
+    Invoke-CmdWithTimeout -Name "launch_activity" -TimeoutSec 10 -ScriptBlock {
+        param($d) adb -s $d shell am start -n com.molink.worker/.MainActivity 2>&1
+    } -ArgumentList @($script:device) | Out-Null
+    Start-Sleep -Seconds 2
 } else {
     info "APK not found, skip install: $apkPath"
 }

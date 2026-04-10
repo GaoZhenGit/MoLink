@@ -3,6 +3,8 @@ package com.molink.access.adb;
 import dadb.AdbStream;
 import dadb.Dadb;
 import dadb.forwarding.TcpForwarder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -10,6 +12,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class AdbClientManager {
+
+    private static final Logger log = LoggerFactory.getLogger(AdbClientManager.class);
+
     private Dadb dadb;
     private String deviceSerial;
     private ExecutorService executor;
@@ -31,14 +36,25 @@ public class AdbClientManager {
             if (dadb != null) {
                 connected = true;
                 startTime = System.currentTimeMillis();
-                System.out.println("ADB 连接成功");
+                // 通过 Dadb.list() 获取设备序列号
+                try {
+                    java.util.List<dadb.Dadb> devices = Dadb.list();
+                    for (dadb.Dadb d : devices) {
+                        // 找到当前连接的设备
+                        this.deviceSerial = d.toString();
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.debug("无法获取设备序列号: {}", e.getMessage());
+                }
+                log.info("ADB 连接成功，设备: {}", this.deviceSerial);
                 return true;
             } else {
-                System.out.println("未发现已连接的 ADB 设备");
+                log.warn("未发现已连接的 ADB 设备");
                 return false;
             }
         } catch (Exception e) {
-            System.err.println("ADB 连接失败: " + e.getMessage());
+            log.error("ADB 连接失败: {}", e.getMessage(), e);
             return false;
         }
     }
@@ -47,8 +63,8 @@ public class AdbClientManager {
         executor.submit(() -> {
             while (running) {
                 if (!connected || !isDeviceConnected()) {
-                    reconnectCount.incrementAndGet();
-                    System.out.println("正在尝试重连... (第 " + reconnectCount.get() + " 次)");
+                    int count = reconnectCount.incrementAndGet();
+                    log.info("正在尝试重连... (第 {} 次)", count);
                     connect();
                 }
                 try {
@@ -65,6 +81,7 @@ public class AdbClientManager {
         try {
             return true;
         } catch (Exception e) {
+            log.warn("ADB 设备连接检查失败: {}", e.getMessage());
             return false;
         }
     }
@@ -108,7 +125,7 @@ public class AdbClientManager {
             try {
                 dadb.close();
             } catch (Exception e) {
-                // 忽略
+                log.warn("关闭 ADB 连接时出错: {}", e.getMessage());
             }
         }
         executor.shutdown();

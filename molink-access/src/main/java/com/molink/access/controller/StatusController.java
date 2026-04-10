@@ -3,6 +3,8 @@ package com.molink.access.controller;
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.AppConfig;
 import com.molink.access.forwarder.PortForwarder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -11,6 +13,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api")
 public class StatusController {
+
+    private static final Logger log = LoggerFactory.getLogger(StatusController.class);
 
     private final AppConfig config;
     private final AdbClientManager adbClient;
@@ -31,6 +35,7 @@ public class StatusController {
         status.put("remotePort", config.getRemotePort());
         status.put("reconnectCount", adbClient.getReconnectCount());
         status.put("uptime", adbClient.getUptime());
+        log.debug("GET /api/status -> connected={}", adbClient.isConnected());
         return status;
     }
 
