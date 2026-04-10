@@ -293,15 +293,48 @@ Write-Host "[$step] Test SOCKS proxy..." -ForegroundColor Cyan
 
 $testUrls = @("http://httpbin.org/ip", "http://myip.ipip.net")
 $proxyUrl = "socks5://127.0.0.1:$AccessPort"
+
+# 7a: Direct connection test (no proxy)
+Write-Host "  [7a] Direct connection test (no proxy)..." -ForegroundColor Gray
+$directOk = $false
+foreach ($url in $testUrls) {
+    $safeName = $url.Replace('http://','').Replace('/','-').Replace('.','_')
+    $directFile = "$LogsDir\direct_${safeName}.log"
+
+    $r = Invoke-CmdWithTimeout -Name "curl_direct" -TimeoutSec 20 -ScriptBlock {
+        param($u, $t) curl.exe $u --max-time $t -s -w "`nHTTP_CODE:%{http_code}`nTIME:%{time_total}" 2>&1
+    } -ArgumentList @($url, 15)
+
+    $directOut = $r.Output -join "`n"
+    $directOut | Out-File $directFile -Encoding UTF8
+
+    if ($directOut -match 'HTTP_CODE:200' -or $directOut -match '"origin"' -or $directOut -match '\d+\.\d+\.\d+\.\d+') {
+        pass "Direct OK: $url"
+        $directOk = $true
+        break
+    } else {
+        info "Direct FAIL: $url"
+    }
+}
+
+if ($directOk) {
+    info "Direct connection: reachable"
+} else {
+    info "Direct connection: unreachable (network issue, not proxy)"
+    add-report "[$step] WARN : direct connection unreachable, cannot verify proxy"
+}
+
+# 7b: Proxy connection test
+Write-Host "  [7b] Proxy connection test..." -ForegroundColor Gray
 $proxyOk = $false
 
 foreach ($url in $testUrls) {
-    info "Testing: curl -x $proxyUrl $url"
+    info "Testing: curl.exe -x $proxyUrl $url"
     $safeName = $url.Replace('http://','').Replace('/','-').Replace('.','_')
     $curlFile = "$LogsDir\proxy_${safeName}.log"
 
     $r = Invoke-CmdWithTimeout -Name "curl_test" -TimeoutSec ($ProxyTimeout + 10) -ScriptBlock {
-        param($u, $p, $t) curl -x $p $u --max-time $t -s -w "`nHTTP_CODE:%{http_code}`nTIME:%{time_total}" 2>&1
+        param($u, $p, $t) curl.exe -x $p $u --max-time $t -s -w "`nHTTP_CODE:%{http_code}`nTIME:%{time_total}" 2>&1
     } -ArgumentList @($url, $proxyUrl, $ProxyTimeout)
 
     $curlOut = $r.Output -join "`n"
