@@ -1,0 +1,23 @@
+工程名称：MoLink
+
+核心目的：让内网的电脑，能够借助MoLink提供的代理上网。
+
+开发环境：
+- 使用Windows 10系统
+- 有Android SDK
+
+软件各端：
+- 工作端（worker）
+-- 运行在Android系统上，最低支持Android 8.1
+-- 运行一个socks5代理及其端口，然后可用转发到互联网
+- 接入端（access）
+-- 运行在Windows 10系统上，可用usb连接Android设备，但该移动设备无法试别为U盘，且无法连接互联网
+-- 运行一个TCP转发程序，将本机的一个端口转发到移动端的socks5端口，类似adb forward命令
+
+软件核心原理：
+- access提供端口转发功能，在本地开启一个端口，代理到MoLink-worker提供socks5协议的网络代理接口
+- worker提供socks5协议的网络代理接口，内网应用通过该代理连接互联网
+
+要求/注意事项：
+- access使用springboot作为框架编写代码，使用纯java开发，使用dadb库开发
+- worker使用Android框架开发
