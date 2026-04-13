@@ -1,5 +1,6 @@
 package com.molink.worker;
 
+import com.molink.worker.BuildConfig;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -52,7 +53,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
             String host = r.targetHost;
             if (host == null) continue;
             boolean isLocalhost = host.startsWith("127.") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1");
-            boolean isStatusPort = r.targetPort == 8081;
+            boolean isStatusPort = r.targetPort == BuildConfig.STATUS_HTTP_PORT;
             if (!isLocalhost && !isStatusPort) {
                 items.add(r);
             }

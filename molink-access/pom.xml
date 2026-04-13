@@ -48,6 +48,13 @@
             <version>4.6.3</version>
         </dependency>
 
+        <!-- Spring Boot 配置处理器（生成配置元数据） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- SLF4J API -->
         <dependency>
             <groupId>org.slf4j</groupId>
