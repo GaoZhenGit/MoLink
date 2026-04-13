@@ -15,6 +15,8 @@ import android.os.SystemClock;
 
 import androidx.core.app.NotificationCompat;
 
+import com.molink.worker.R;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -22,7 +24,11 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Socks5ProxyService extends Service {
 
@@ -30,6 +36,13 @@ public class Socks5ProxyService extends Service {
     private static final int SOCKS5_PORT = 1080;
     private static final String CHANNEL_ID = "Socks5ProxyChannel";
     private static final int NOTIFICATION_ID = 1;
+
+    /** MainActivity 通过此静态引用直接访问服务，无需绑定 */
+    private static volatile Socks5ProxyService instance;
+
+    public static Socks5ProxyService getInstance() {
+        return instance;
+    }
 
     private ServerSocket serverSocketV4;
     private ServerSocket serverSocketV6;
@@ -39,6 +52,41 @@ public class Socks5ProxyService extends Service {
     private Thread serverThreadV4;
     private Thread serverThreadV6;
     private StatusHttpServer httpServer;
+
+    // ========== UI 统计相关 ==========
+    private final AtomicInteger historyCount = new AtomicInteger(0);
+    private final AtomicLong totalBytesDown = new AtomicLong(0);
+    private final AtomicLong totalBytesUp = new AtomicLong(0);
+    private final CopyOnWriteArrayList<ConnectionRecord> activeConnections = new CopyOnWriteArrayList<>();
+
+    /** 静态回调接口，MainActivity 通过 LocalBinder 注册 */
+    public interface StatusListener {
+        void onStatusUpdate(long uptime, int connectionCount, int historyCount,
+                            long bytesDown, long bytesUp,
+                            List<ConnectionRecord> activeConnections);
+    }
+    private final CopyOnWriteArrayList<StatusListener> statusListeners = new CopyOnWriteArrayList<>();
+
+    public void addStatusListener(StatusListener listener) {
+        if (listener != null) statusListeners.addIfAbsent(listener);
+    }
+
+    public void removeStatusListener(StatusListener listener) {
+        statusListeners.remove(listener);
+    }
+
+    private void notifyStatusUpdate() {
+        List<ConnectionRecord> snapshot = new ArrayList<>(activeConnections);
+        for (StatusListener l : statusListeners) {
+            try {
+                l.onStatusUpdate(getUptime(), connectionCount.get(), historyCount.get(),
+                        totalBytesDown.get(), totalBytesUp.get(), snapshot);
+            } catch (Exception e) {
+                // ignore
+            }
+        }
+    }
+    // ==================================
 
     private final IBinder binder = new LocalBinder();
 
@@ -51,6 +99,7 @@ public class Socks5ProxyService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         Log.d(TAG, "onCreate");
         createNotificationChannel();
     }
@@ -76,13 +125,17 @@ public class Socks5ProxyService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        Log.d(TAG, "onDestroy, stopping server");
+        Log.i(TAG, "onDestroy BEGIN, isRunning=" + isRunning);
+        instance = null;
         isRunning = false;
         closeQuietly(serverSocketV4);
         closeQuietly(serverSocketV6);
         if (httpServer != null) {
             httpServer.stop();
         }
+        // 强制移除前台通知（stopService 后 Android 会自动移除，此处显式调用确保可靠）
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        Log.i(TAG, "onDestroy END");
     }
 
     @Override
@@ -133,7 +186,7 @@ public class Socks5ProxyService extends Service {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("MoLink Worker")
                 .setContentText("SOCKS5 代理服务运行中，端口 " + SOCKS5_PORT)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(R.drawable.ic_notification)
                 .build();
     }
 
@@ -189,6 +242,18 @@ public class Socks5ProxyService extends Service {
         serverThreadV4.start();
         serverThreadV6.start();
         Log.i(TAG, "SOCKS5 server started on port " + SOCKS5_PORT);
+
+        // 定时向 UI 推送状态更新（每 2 秒）
+        final Handler uiHandler = new Handler(Looper.getMainLooper());
+        uiHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (isRunning) {
+                    notifyStatusUpdate();
+                    uiHandler.postDelayed(this, 2000);
+                }
+            }
+        }, 2000);
     }
 
     private void handleClient(Socket clientSocket) {
@@ -279,14 +344,29 @@ public class Socks5ProxyService extends Service {
 
             Log.i(TAG, "Connection established to " + destAddr + ":" + destPort);
 
+            // === UI 统计：记录新连接 ===
+            historyCount.incrementAndGet();
+            connectionCount.incrementAndGet();
+            String clientIp = clientSocket.getRemoteSocketAddress().toString();
+            if (clientIp.startsWith("/")) clientIp = clientIp.substring(1);
+            final ConnectionRecord record = new ConnectionRecord(clientIp, destAddr, destPort, System.currentTimeMillis());
+            activeConnections.add(record);
+            // === 统计注入结束 ===
+
             // 双向转发数据
-            Thread t1 = new Thread(() -> forward(clientSocket, targetSocket, "c->s"), "Forward-c->s");
-            Thread t2 = new Thread(() -> forward(targetSocket, clientSocket, "s->c"), "Forward-s->c");
+            Thread t1 = new Thread(() -> forward(clientSocket, targetSocket, "c->s", record), "Forward-c->s");
+            Thread t2 = new Thread(() -> forward(targetSocket, clientSocket, "s->c", record), "Forward-s->c");
             t1.start();
             t2.start();
 
             t1.join();
             t2.join();
+
+            // === UI 统计：连接断开，移除记录 ===
+            activeConnections.remove(record);
+            connectionCount.decrementAndGet();
+            notifyStatusUpdate();
+            // === 统计注入结束 ===
 
             targetSocket.close();
             clientSocket.close();
@@ -310,7 +390,7 @@ public class Socks5ProxyService extends Service {
         }
     }
 
-    private void forward(Socket src, Socket dest, String direction) {
+    private void forward(Socket src, Socket dest, String direction, ConnectionRecord record) {
         try {
             InputStream in = src.getInputStream();
             OutputStream out = dest.getOutputStream();
@@ -319,6 +399,17 @@ public class Socks5ProxyService extends Service {
             while ((len = in.read(buffer)) != -1) {
                 out.write(buffer, 0, len);
                 out.flush();
+                // === UI 统计：字节计数 ===
+                // c->s: 客户端到服务器 = 下载流量
+                // s->c: 服务器到客户端 = 上传流量
+                if ("c->s".equals(direction)) {
+                    totalBytesDown.addAndGet(len);
+                    record.bytesDown.addAndGet(len);
+                } else {
+                    totalBytesUp.addAndGet(len);
+                    record.bytesUp.addAndGet(len);
+                }
+                // === 统计注入结束 ===
             }
         } catch (IOException e) {
             // 连接正常关闭
