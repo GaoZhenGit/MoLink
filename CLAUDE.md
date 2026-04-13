@@ -20,6 +20,9 @@ D:/project/MoLink/
 - **配置优先级**：环境变量 > 配置文件 > 默认值
 - **开发环境**：Windows 10，有 Android SDK
 
+## 测试
+- 本工程提供自动化测试脚本test\test.py，包含清理日志、停止服务、构建、运行服务、测试、停止服务
+
 ## 一、molink-worker（Android 端）
 
 ### 技术栈

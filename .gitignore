@@ -18,3 +18,4 @@ molink-worker\.gradle\
 molink-worker\build\
 molink-worker\app\build\
 logs
+__pycache__
