@@ -592,11 +592,11 @@ def main() -> None:
         results[step] = ("FAIL", "Proxy unreachable")
         exit_code = 1
 
-    # 8c: Access /api/status verification
+    # 8c: Access /api/status verification（请求时实时 curl 测试代理）
     print("  [8c] Access /api/status verification (curl)...")
     curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
     print(f"  $ {' '.join(curl_cmd)}")
-    r = run_cmd(curl_cmd, timeout=15, print_output=True)
+    r = run_cmd(curl_cmd, timeout=20, print_output=True)
     print(f"  Response:\n{r.stdout}")
 
     try:
@@ -624,16 +624,16 @@ def main() -> None:
         timeout=STOP_TIMEOUT, print_output=True,
     )
 
-    # POST 触发同步健康检查，等待检查完成（最多 8s）
-    curl_cmd = [curl, "-s", "-X", "POST", "http://127.0.0.1:8080/api/status/check"]
+    # GET /api/status，触发实时 curl 测试 SOCKS 代理
+    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
     print(f"  $ {' '.join(curl_cmd)}")
-    r = run_cmd(curl_cmd, timeout=12, print_output=True)
+    r = run_cmd(curl_cmd, timeout=20, print_output=True)
     print(f"  Response:\n{r.stdout}")
 
     try:
         import json
-        check_data = json.loads(r.stdout)
-        ph = check_data.get("proxyHealth", {})
+        api_data_after_stop = json.loads(r.stdout)
+        ph = api_data_after_stop.get("proxyHealth", {})
 
         ph_available = ph.get("available", None)
         unavailable_reason = ph.get("unavailableReason", "")
