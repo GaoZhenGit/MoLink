@@ -16,14 +16,15 @@ public class Socks5HealthChecker {
     private static final Logger log = LoggerFactory.getLogger(Socks5HealthChecker.class);
 
     private static final String TEST_URL = "http://httpbin.org/ip";
-    private static final int SOCKS_PORT = 1080;
     private static final int POLL_INTERVAL_SEC = 10;
     private static final int HTTP_TIMEOUT_MS = 15000;
 
+    private final int socksPort;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private volatile Map<String, Object> cachedHealth = new LinkedHashMap<>();
 
-    public Socks5HealthChecker() {
+    public Socks5HealthChecker(int socksPort) {
+        this.socksPort = socksPort;
         // 初始化缓存，确保 getProxyHealth() 在首次 check() 完成前也有数据
         cachedHealth = new LinkedHashMap<>();
         cachedHealth.put("available", false);
@@ -50,7 +51,7 @@ public class Socks5HealthChecker {
         boolean ok = false;
         try {
             Proxy proxy = new Proxy(Proxy.Type.SOCKS,
-                    new InetSocketAddress("127.0.0.1", SOCKS_PORT));
+                    new InetSocketAddress("127.0.0.1", socksPort));
             URL url = new URL(TEST_URL);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection(proxy);
             conn.setConnectTimeout(HTTP_TIMEOUT_MS);

@@ -47,7 +47,7 @@ class CmdResult:
 
 
 # ---------------------------------------------------------------------------
-# Color printing (TDD Phase 1)
+# Color printing
 # ---------------------------------------------------------------------------
 
 FOREGROUND_COLORS = {
@@ -94,15 +94,13 @@ def step_fail(step: int, desc: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Command execution (TDD Phase 2)
+# Command execution
 # ---------------------------------------------------------------------------
 
 def run_cmd(cmd: List[str], timeout: int, cwd: Optional[Path] = None,
             print_output: bool = False) -> CmdResult:
     start = time.time()
     timed_out = False
-    # On Windows, .bat/.cmd files must be run via cmd.exe
-    # Use a single string (not list) so shell=True quoting is consistent
     shell = False
     if sys.platform == "win32":
         for i, arg in enumerate(cmd):
@@ -160,7 +158,6 @@ def run_cmd(cmd: List[str], timeout: int, cwd: Optional[Path] = None,
         )
     except subprocess.TimeoutExpired:
         elapsed = time.time() - start
-        # Collect partial output if available
         try:
             proc.kill()
             stdout = proc.stdout.read() if proc.stdout else ""
@@ -178,7 +175,7 @@ def run_cmd(cmd: List[str], timeout: int, cwd: Optional[Path] = None,
 
 
 # ---------------------------------------------------------------------------
-# Utilities (TDD Phase 3)
+# Utilities
 # ---------------------------------------------------------------------------
 
 def parse_device_from_adb_devices(output: str) -> Optional[str]:
@@ -199,7 +196,7 @@ def get_curl_cmd() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Service stop & verify (TDD Phase 4)
+# Service stop & verify
 # ---------------------------------------------------------------------------
 
 def cleanup_logs() -> None:
@@ -255,7 +252,7 @@ def verify_worker_stopped(device: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Build (TDD Phase 5)
+# Build
 # ---------------------------------------------------------------------------
 
 def build_worker() -> CmdResult:
@@ -277,7 +274,7 @@ def build_access() -> CmdResult:
 
 
 # ---------------------------------------------------------------------------
-# Logcat (TDD Phase 6)
+# Logcat
 # ---------------------------------------------------------------------------
 
 def start_logcat(device: str) -> subprocess.Popen:
@@ -302,7 +299,7 @@ def stop_logcat(proc: subprocess.Popen) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Curl testing (TDD Phase 6)
+# Curl testing
 # ---------------------------------------------------------------------------
 
 def wait_port(host: str, port: int, timeout: int) -> bool:
@@ -341,28 +338,22 @@ def test_socks_proxy(curl: str, urls: List[str]) -> tuple:
         elapsed = time.time() - start
         if r.returncode == 0 or "HTTP/" in r.stdout or '"origin"' in r.stdout:
             return (True, url, elapsed)
-        # Print failure for debugging
         fail(f"SOCKS proxy FAIL: {url}")
     return (False, urls[-1], 0)
 
 
 # ---------------------------------------------------------------------------
-# Cleanup and summary (TDD Phase 7)
+# Cleanup and summary
 # ---------------------------------------------------------------------------
 
 def cleanup(device: str, access_proc: subprocess.Popen, logcat_proc: subprocess.Popen) -> None:
     """Stop all services: logcat, worker, access."""
-    # Stop logcat first
     stop_logcat(logcat_proc)
-
-    # Stop worker
     r = run_cmd(
         ["adb", "-s", device, "shell", "am", "force-stop", "com.molink.worker"],
         timeout=10, print_output=True,
     )
     print(r.stdout)
-
-    # Stop access
     if access_proc and access_proc.poll() is None:
         pid = str(access_proc.pid)
         if sys.platform == "win32":
@@ -441,23 +432,13 @@ def main() -> None:
     step_ok(step, f"ADB device {device} detected", elapsed)
     results[step] = ("PASS", f"Device {device}")
 
-    # --- Step 2: Cleanup logs ---
+    # --- Step 2: Stop old services + verify ---
     step = "2"
-    t = time.time()
-    print(f"[{step}] Cleanup logs...")
-    cleanup_logs()
-    elapsed = int(time.time() - t)
-    step_ok(step, "Logs cleaned", elapsed)
-    results[step] = ("PASS", "Logs cleaned")
-
-    # --- Step 3: Stop old services + verify ---
-    step = "3"
     t = time.time()
     print(f"[{step}] Stop old services...")
     stop_access_service()
     stop_worker_service(device)
     time.sleep(2)
-    # Double verify
     access_ok = verify_access_stopped()
     worker_ok = verify_worker_stopped(device)
     elapsed = int(time.time() - t)
@@ -467,6 +448,15 @@ def main() -> None:
         summary_and_exit(device, results, start_time, 1)
     step_ok(step, "Services stopped and verified", elapsed)
     results[step] = ("PASS", "Services stopped")
+
+    # --- Step 3: Cleanup logs ---
+    step = "3"
+    t = time.time()
+    print(f"[{step}] Cleanup logs...")
+    cleanup_logs()
+    elapsed = int(time.time() - t)
+    step_ok(step, "Logs cleaned", elapsed)
+    results[step] = ("PASS", "Logs cleaned")
 
     # --- Step 4: Build worker ---
     step = "4"
@@ -498,7 +488,6 @@ def main() -> None:
     step = "6"
     t = time.time()
     print(f"[{step}] Start logcat (background)...")
-    # Clear logcat buffer first
     run_cmd(["adb", "-s", device, "logcat", "-c"], timeout=10)
     logcat_proc = start_logcat(device)
     elapsed = int(time.time() - t)
@@ -510,7 +499,6 @@ def main() -> None:
     t = time.time()
     print(f"[{step}] Start services...")
 
-    # Install APK if exists
     if APK_PATH.exists():
         info("Installing APK...")
         r = run_cmd(["adb", "-s", device, "install", "-r", str(APK_PATH)],
@@ -527,7 +515,6 @@ def main() -> None:
         print(r.stdout)
         time.sleep(2)
 
-    # Start worker SOCKS5 service
     info("Starting worker service...")
     r = run_cmd(
         ["adb", "-s", device, "shell", "am", "startservice",
@@ -537,7 +524,6 @@ def main() -> None:
     print(r.stdout)
     time.sleep(SERVICE_WAIT)
 
-    # Start access (background) - run from project root
     info("Starting access...")
     access_proc = subprocess.Popen(
         [shutil.which("java") or "java",
@@ -548,7 +534,6 @@ def main() -> None:
     )
     time.sleep(5)
 
-    # Wait for access API
     info("Waiting for access API (port 8080)...")
     api_ready = wait_port("127.0.0.1", 8080, 20)
     elapsed = int(time.time() - t)
@@ -593,18 +578,16 @@ def main() -> None:
         exit_code = 1
 
     # 8c: Access /api/status verification (workerStatus + proxyHealth)
-    print("  [8c] Access /api/status verification...")
+    print("  [8c] Access /api/status verification (curl)...")
+    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
+    print(f"  $ {' '.join(curl_cmd)}")
+    r = run_cmd(curl_cmd, timeout=15, print_output=True)
+    print(f"  Response:\n{r.stdout}")
+
     try:
-        import urllib.request
         import json
-        no_proxy_saved = os.environ.get("no_proxy", "")
-        os.environ["no_proxy"] = "127.0.0.1,localhost"
-        try:
-            with urllib.request.urlopen("http://127.0.0.1:8080/api/status", timeout=10) as resp:
-                api_data = json.loads(resp.read().decode("utf-8"))
-        finally:
-            os.environ["no_proxy"] = no_proxy_saved
-        print(f"  Full status: {json.dumps(api_data, indent=2)}")
+        api_data = json.loads(r.stdout)
+        print(f"  Pretty:\n{json.dumps(api_data, indent=2)}")
 
         has_worker_status = "workerStatus" in api_data
         has_proxy_health = "proxyHealth" in api_data
@@ -620,6 +603,54 @@ def main() -> None:
             warn("proxyHealth not present")
     except Exception as e:
         warn(f"Could not verify /api/status: {e}")
+
+    # --- Step 8d: Worker 停止后 /api/status 应正确反映不可用状态 ---
+    step = "8d"
+    t = time.time()
+    print(f"[{step}] Worker 停止后 /api/status 状态验证...")
+    info("Stopping worker service...")
+    run_cmd(
+        ["adb", "-s", device, "shell", "am", "force-stop", "com.molink.worker"],
+        timeout=STOP_TIMEOUT, print_output=True,
+    )
+    info("Waiting for status to update (12s)...")
+    time.sleep(12)
+    elapsed = int(time.time() - t)
+
+    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
+    print(f"  $ {' '.join(curl_cmd)}")
+    r = run_cmd(curl_cmd, timeout=15, print_output=True)
+    print(f"  Response:\n{r.stdout}")
+
+    try:
+        import json
+        api_data_after_stop = json.loads(r.stdout)
+
+        ws = api_data_after_stop.get("workerStatus", {})
+        ph = api_data_after_stop.get("proxyHealth", {})
+
+        ws_available = ws.get("available", None)
+        ws_socks_running = ws.get("socksRunning", None)
+        ph_available = ph.get("available", None)
+        unavailable_reason = ws.get("unavailableReason", "")
+
+        print(f"  workerStatus: available={ws_available}, socksRunning={ws_socks_running}, unavailableReason={unavailable_reason}")
+        print(f"  proxyHealth: available={ph_available}")
+
+        if ws_available is False and ph_available is False:
+            pass_(f"Worker 不可用状态正确: available={ws_available}, proxyHealth.available={ph_available}")
+            results[step] = ("PASS", f"workerStatus.available={ws_available}, proxyHealth.available={ph_available}")
+        elif ws_available is False and ph_available is True:
+            warn(f"workerStatus.available=false 但 proxyHealth.available={ph_available}（proxyHealth 可能有延迟）")
+            results[step] = ("PASS", f"workerStatus.available={ws_available}（proxyHealth={ph_available} 可能有延迟）")
+        else:
+            fail(f"Worker 不可用状态不正确: workerStatus.available={ws_available}, socksRunning={ws_socks_running}")
+            results[step] = ("FAIL", f"workerStatus.available={ws_available}（期望 false）")
+            exit_code = 1
+    except Exception as e:
+        fail(f"无法验证停止后的状态: {e}")
+        results[step] = ("FAIL", f"异常: {e}")
+        exit_code = 1
 
     # --- Summary + Cleanup ---
     cleanup(device, access_proc, logcat_proc)

@@ -1,0 +1,5 @@
+molink:
+  local-port: ${MOLINK_LOCAL_PORT:1080}
+  remote-port: ${MOLINK_REMOTE_PORT:1080}
+  api-port: ${MOLINK_API_PORT:8080}
+  config-path: ${MOLINK_CONFIG_PATH:config.properties}

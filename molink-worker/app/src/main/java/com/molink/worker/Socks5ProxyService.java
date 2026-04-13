@@ -15,6 +15,7 @@ import android.os.SystemClock;
 
 import androidx.core.app.NotificationCompat;
 
+import com.molink.worker.BuildConfig;
 import com.molink.worker.R;
 
 import java.io.IOException;
@@ -33,7 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public class Socks5ProxyService extends Service {
 
     private static final String TAG = "Socks5ProxyService";
-    private static final int SOCKS5_PORT = 1080;
+    private static final int SOCKS5_PORT = BuildConfig.SOCKS_PORT;
+    private static final int STATUS_HTTP_PORT = BuildConfig.STATUS_HTTP_PORT;
     private static final String CHANNEL_ID = "Socks5ProxyChannel";
     private static final int NOTIFICATION_ID = 1;
 
@@ -112,9 +114,9 @@ public class Socks5ProxyService extends Service {
         // 启动 HTTP 状态服务
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
-                httpServer = new StatusHttpServer(8081, this);
+                httpServer = new StatusHttpServer(STATUS_HTTP_PORT, this);
                 httpServer.start();
-                Log.i(TAG, "HTTP status server started on port 8081");
+                Log.i(TAG, "HTTP status server started on port " + STATUS_HTTP_PORT);
             } catch (IOException e) {
                 Log.e(TAG, "Failed to start HTTP server: " + e.getMessage());
             }

@@ -1,7 +1,7 @@
 package com.molink.access.controller;
 
 import com.molink.access.adb.AdbClientManager;
-import com.molink.access.config.AppConfig;
+import com.molink.access.config.MolinkProperties;
 import com.molink.access.forwarder.PortForwarder;
 import com.molink.access.status.WorkerStatusTracker;
 import com.molink.access.status.Socks5HealthChecker;
@@ -18,17 +18,17 @@ public class StatusController {
 
     private static final Logger log = LoggerFactory.getLogger(StatusController.class);
 
-    private final AppConfig config;
+    private final MolinkProperties props;
     private final AdbClientManager adbClient;
     private final PortForwarder portForwarder;
     private final WorkerStatusTracker workerStatusTracker;
     private final Socks5HealthChecker socks5HealthChecker;
 
-    public StatusController(AppConfig config, AdbClientManager adbClient,
+    public StatusController(MolinkProperties props, AdbClientManager adbClient,
             PortForwarder portForwarder,
             WorkerStatusTracker workerStatusTracker,
             Socks5HealthChecker socks5HealthChecker) {
-        this.config = config;
+        this.props = props;
         this.adbClient = adbClient;
         this.portForwarder = portForwarder;
         this.workerStatusTracker = workerStatusTracker;
@@ -40,8 +40,8 @@ public class StatusController {
         Map<String, Object> status = new HashMap<>();
         status.put("connected", adbClient.isConnected());
         status.put("deviceSerial", adbClient.getDeviceSerial());
-        status.put("localPort", config.getLocalPort());
-        status.put("remotePort", config.getRemotePort());
+        status.put("localPort", props.getLocalPort());
+        status.put("remotePort", props.getRemotePort());
         status.put("reconnectCount", adbClient.getReconnectCount());
         status.put("uptime", adbClient.getUptime());
         // Worker 端状态（通过 dadb HTTP 轮询）
@@ -59,16 +59,16 @@ public class StatusController {
     @GetMapping("/config")
     public Map<String, Object> getConfig() {
         Map<String, Object> cfg = new HashMap<>();
-        cfg.put("localPort", config.getLocalPort());
-        cfg.put("remotePort", config.getRemotePort());
-        cfg.put("apiPort", config.getApiPort());
+        cfg.put("localPort", props.getLocalPort());
+        cfg.put("remotePort", props.getRemotePort());
+        cfg.put("apiPort", props.getApiPort());
         return cfg;
     }
 
     @PutMapping("/config")
     public Map<String, Object> updateConfig(@RequestBody Map<String, Integer> updates) {
         if (updates.containsKey("apiPort")) {
-            config.setApiPort(updates.get("apiPort"));
+            props.setApiPort(updates.get("apiPort"));
         }
         return getConfig();
     }

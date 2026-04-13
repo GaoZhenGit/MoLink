@@ -27,8 +27,9 @@ public class WorkerStatusTracker {
 
     public WorkerStatusTracker(AdbClientManager adbClient) {
         this.adbClient = adbClient;
-        // 初始化缓存默认值，确保首次 getWorkerStatus() 调用时有数据
+        // 初始化缓存默认值
         this.cachedStatus = new LinkedHashMap<>();
+        this.cachedStatus.put("appReachable", false);
         this.cachedStatus.put("socksRunning", false);
         this.cachedStatus.put("socksPort", -1);
         this.cachedStatus.put("uptime", 0L);
@@ -62,6 +63,11 @@ public class WorkerStatusTracker {
         }
     }
 
+    /**
+     * 获取 worker 状态。
+     * available=false 时说明 worker app 不可达（app 未运行或 USB 断开）。
+     * available=true 时根据 socksRunning 判断 service 是否在运行。
+     */
     public Map<String, Object> getWorkerStatus() {
         Map<String, Object> result = new LinkedHashMap<>(cachedStatus);
         result.put("lastSeen", System.currentTimeMillis());
@@ -72,6 +78,7 @@ public class WorkerStatusTracker {
     private void poll() {
         if (!adbClient.isConnected()) {
             available = false;
+            resetStatus("ADB disconnected");
             return;
         }
         try {
@@ -94,18 +101,32 @@ public class WorkerStatusTracker {
                 }
             } else {
                 available = false;
+                resetStatus("HTTP " + code);
                 log.warn("Worker HTTP responded code {}", code);
             }
             conn.disconnect();
         } catch (Exception e) {
             available = false;
+            resetStatus(e.getClass().getSimpleName());
             log.warn("Worker status poll failed: {}", e.getMessage());
         }
     }
 
+    private void resetStatus(String reason) {
+        Map<String, Object> reset = new LinkedHashMap<>();
+        reset.put("appReachable", false);
+        reset.put("socksRunning", false);
+        reset.put("socksPort", -1);
+        reset.put("uptime", 0L);
+        reset.put("memoryUsage", -1.0);
+        reset.put("connectionCount", -1);
+        reset.put("unavailableReason", reason);
+        this.cachedStatus = reset;
+    }
+
     private void parseAndCache(String json) {
-        // 简单字符串解析：提取 socksRunning, socksPort, uptime, memoryUsage, connectionCount
         Map<String, Object> parsed = new LinkedHashMap<>();
+        parsed.put("appReachable", true);
         parsed.put("socksRunning", extractBool(json, "socksRunning"));
         parsed.put("socksPort", extractInt(json, "socksPort"));
         parsed.put("uptime", extractLong(json, "uptime"));
@@ -135,7 +156,6 @@ public class WorkerStatusTracker {
         int idx = json.indexOf(pattern);
         if (idx < 0) return "";
         int start = idx + pattern.length();
-        // 跳过空白
         while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
         int end = start;
         boolean inString = false;
