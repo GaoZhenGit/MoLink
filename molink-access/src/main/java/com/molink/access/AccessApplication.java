@@ -3,6 +3,8 @@ package com.molink.access;
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.AppConfig;
 import com.molink.access.forwarder.PortForwarder;
+import com.molink.access.status.WorkerStatusTracker;
+import com.molink.access.status.Socks5HealthChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -42,7 +44,20 @@ public class AccessApplication {
     }
 
     @Bean
-    public CommandLineRunner runner(AppConfig config, AdbClientManager adbClient, PortForwarder portForwarder) {
+    public WorkerStatusTracker workerStatusTracker(AdbClientManager adbClient) {
+        return new WorkerStatusTracker(adbClient);
+    }
+
+    @Bean
+    public Socks5HealthChecker socks5HealthChecker() {
+        return new Socks5HealthChecker();
+    }
+
+    @Bean
+    public CommandLineRunner runner(AppConfig config, AdbClientManager adbClient,
+            PortForwarder portForwarder,
+            WorkerStatusTracker workerStatusTracker,
+            Socks5HealthChecker socks5HealthChecker) {
         return args -> {
             log.info("=== MoLink Access 启动 ===");
             log.info("本地端口: {}", config.getLocalPort());
@@ -65,6 +80,11 @@ public class AccessApplication {
                 log.error("端口转发启动失败: {}", e.getMessage(), e);
                 System.exit(1);
             }
+
+            // 启动 worker 状态轮询和 SOCKS 健康检查
+            workerStatusTracker.start();
+            socks5HealthChecker.start();
+            log.info("Worker status tracker and SOCKS health checker started");
 
             log.info("服务已启动，可通过 http://localhost:{}/api/status 查看状态", config.getApiPort());
         };

@@ -22,3 +22,6 @@
 要求/注意事项：
 - access使用springboot作为框架编写代码，使用纯java开发，支持jdk8环境运行，使用dadb库开发
 - worker使用Android框架开发，使用纯java开发，不要改gradle、agp、android框架版本
+
+feature:
+- 状态显示：access端需要提供接口，显示当前的状态，包括但不限于代理端口是否打开，是否连接真机，真机上的服务是否运行；worker需要在界面上显示类似信息。
