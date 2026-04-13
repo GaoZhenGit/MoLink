@@ -2,8 +2,6 @@ package com.molink.access.controller;
 
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.MolinkProperties;
-import com.molink.access.forwarder.PortForwarder;
-import com.molink.access.status.WorkerStatusTracker;
 import com.molink.access.status.Socks5HealthChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,18 +18,12 @@ public class StatusController {
 
     private final MolinkProperties props;
     private final AdbClientManager adbClient;
-    private final PortForwarder portForwarder;
-    private final WorkerStatusTracker workerStatusTracker;
     private final Socks5HealthChecker socks5HealthChecker;
 
     public StatusController(MolinkProperties props, AdbClientManager adbClient,
-            PortForwarder portForwarder,
-            WorkerStatusTracker workerStatusTracker,
             Socks5HealthChecker socks5HealthChecker) {
         this.props = props;
         this.adbClient = adbClient;
-        this.portForwarder = portForwarder;
-        this.workerStatusTracker = workerStatusTracker;
         this.socks5HealthChecker = socks5HealthChecker;
     }
 
@@ -44,16 +36,23 @@ public class StatusController {
         status.put("remotePort", props.getRemotePort());
         status.put("reconnectCount", adbClient.getReconnectCount());
         status.put("uptime", adbClient.getUptime());
-        // Worker 端状态（通过 dadb HTTP 轮询）
-        if (workerStatusTracker != null) {
-            status.put("workerStatus", workerStatusTracker.getWorkerStatus());
-        }
-        // SOCKS 代理通道健康状态
-        if (socks5HealthChecker != null) {
-            status.put("proxyHealth", socks5HealthChecker.getProxyHealth());
-        }
+        status.put("proxyHealth", socks5HealthChecker.getProxyHealth());
         log.debug("GET /api/status -> connected={}", adbClient.isConnected());
         return status;
+    }
+
+    /**
+     * 同步触发一次 SOCKS 健康检查并返回结果。
+     * 用于测试场景：停止 worker 后立即验证状态。
+     */
+    @PostMapping("/status/check")
+    public Map<String, Object> triggerHealthCheck() {
+        Map<String, Object> result = socks5HealthChecker.waitForNextCheck();
+        log.info("Triggered health check: available={}, reason={}",
+                result.get("available"), result.get("unavailableReason"));
+        Map<String, Object> response = new HashMap<>();
+        response.put("proxyHealth", result);
+        return response;
     }
 
     @GetMapping("/config")
@@ -63,13 +62,5 @@ public class StatusController {
         cfg.put("remotePort", props.getRemotePort());
         cfg.put("apiPort", props.getApiPort());
         return cfg;
-    }
-
-    @PutMapping("/config")
-    public Map<String, Object> updateConfig(@RequestBody Map<String, Integer> updates) {
-        if (updates.containsKey("apiPort")) {
-            props.setApiPort(updates.get("apiPort"));
-        }
-        return getConfig();
     }
 }

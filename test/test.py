@@ -278,13 +278,28 @@ def build_access() -> CmdResult:
 # ---------------------------------------------------------------------------
 
 def start_logcat(device: str) -> subprocess.Popen:
-    """Start adb logcat as background process, redirect to logs/worker.log."""
+    """Start adb logcat as background process, filter only com.molink.worker process logs."""
     log_file = open(LOGS_DIR / "worker.log", "w", encoding="utf-8")
-    proc = subprocess.Popen(
-        ["adb", "-s", device, "logcat"],
-        stdout=log_file,
-        stderr=subprocess.DEVNULL,
-    )
+    # 查找 worker 进程 PID（pidof 精确匹配包名）
+    pid = None
+    cmd_pidof = ["adb", "-s", device, "shell", "pidof", "com.molink.worker"]
+    print(f"  $ {' '.join(cmd_pidof)}")
+    r = run_cmd(cmd_pidof, timeout=10, print_output=True)
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line and line.isdigit():
+            pid = line
+            break
+    if pid:
+        info(f"Worker PID: {pid}")
+        cmd = ["adb", "-s", device, "logcat", "--pid=" + pid]
+        print(f"  $ {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.DEVNULL)
+    else:
+        warn("Could not find worker PID, collecting all logs")
+        cmd = ["adb", "-s", device, "logcat"]
+        print(f"  $ {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.DEVNULL)
     return proc
 
 
@@ -577,7 +592,7 @@ def main() -> None:
         results[step] = ("FAIL", "Proxy unreachable")
         exit_code = 1
 
-    # 8c: Access /api/status verification (workerStatus + proxyHealth)
+    # 8c: Access /api/status verification
     print("  [8c] Access /api/status verification (curl)...")
     curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
     print(f"  $ {' '.join(curl_cmd)}")
@@ -589,63 +604,48 @@ def main() -> None:
         api_data = json.loads(r.stdout)
         print(f"  Pretty:\n{json.dumps(api_data, indent=2)}")
 
-        has_worker_status = "workerStatus" in api_data
-        has_proxy_health = "proxyHealth" in api_data
+        ph = api_data.get("proxyHealth", {})
+        ph_available = ph.get("available", None)
 
-        if has_worker_status:
-            pass_(f"workerStatus present: socksRunning={api_data['workerStatus'].get('socksRunning')}")
+        if ph_available is True:
+            pass_(f"proxyHealth available=true, latencyMs={ph.get('latencyMs')}")
         else:
-            warn("workerStatus not present (worker HTTP server may not be ready)")
-
-        if has_proxy_health:
-            pass_(f"proxyHealth available={api_data['proxyHealth'].get('available')}")
-        else:
-            warn("proxyHealth not present")
+            warn(f"proxyHealth available={ph_available}（SOCKS 代理尚未就绪或有延迟）")
     except Exception as e:
         warn(f"Could not verify /api/status: {e}")
 
-    # --- Step 8d: Worker 停止后 /api/status 应正确反映不可用状态 ---
+    # --- Step 8d: Worker 停止后 /api/status 应正确反映 SOCKS 不可用 ---
     step = "8d"
     t = time.time()
-    print(f"[{step}] Worker 停止后 /api/status 状态验证...")
+    print(f"[{step}] Worker 停止后 SOCKS 代理不可用验证...")
     info("Stopping worker service...")
     run_cmd(
         ["adb", "-s", device, "shell", "am", "force-stop", "com.molink.worker"],
         timeout=STOP_TIMEOUT, print_output=True,
     )
-    info("Waiting for status to update (12s)...")
-    time.sleep(12)
-    elapsed = int(time.time() - t)
 
-    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
+    # POST 触发同步健康检查，等待检查完成（最多 8s）
+    curl_cmd = [curl, "-s", "-X", "POST", "http://127.0.0.1:8080/api/status/check"]
     print(f"  $ {' '.join(curl_cmd)}")
-    r = run_cmd(curl_cmd, timeout=15, print_output=True)
+    r = run_cmd(curl_cmd, timeout=12, print_output=True)
     print(f"  Response:\n{r.stdout}")
 
     try:
         import json
-        api_data_after_stop = json.loads(r.stdout)
+        check_data = json.loads(r.stdout)
+        ph = check_data.get("proxyHealth", {})
 
-        ws = api_data_after_stop.get("workerStatus", {})
-        ph = api_data_after_stop.get("proxyHealth", {})
-
-        ws_available = ws.get("available", None)
-        ws_socks_running = ws.get("socksRunning", None)
         ph_available = ph.get("available", None)
-        unavailable_reason = ws.get("unavailableReason", "")
+        unavailable_reason = ph.get("unavailableReason", "")
 
-        print(f"  workerStatus: available={ws_available}, socksRunning={ws_socks_running}, unavailableReason={unavailable_reason}")
-        print(f"  proxyHealth: available={ph_available}")
+        print(f"  proxyHealth: available={ph_available}, unavailableReason={unavailable_reason}")
 
-        if ws_available is False and ph_available is False:
-            pass_(f"Worker 不可用状态正确: available={ws_available}, proxyHealth.available={ph_available}")
-            results[step] = ("PASS", f"workerStatus.available={ws_available}, proxyHealth.available={ph_available}")
-        elif ws_available is False and ph_available is True:
-            warn(f"workerStatus.available=false 但 proxyHealth.available={ph_available}（proxyHealth 可能有延迟）")
-            results[step] = ("PASS", f"workerStatus.available={ws_available}（proxyHealth={ph_available} 可能有延迟）")
+        if ph_available is False:
+            pass_(f"SOCKS 代理不可用状态正确: available={ph_available}, reason={unavailable_reason}")
+            results[step] = ("PASS", f"proxyHealth.available={ph_available}, reason={unavailable_reason}")
         else:
-            fail(f"Worker 不可用状态不正确: workerStatus.available={ws_available}, socksRunning={ws_socks_running}")
-            results[step] = ("FAIL", f"workerStatus.available={ws_available}（期望 false）")
+            fail(f"SOCKS 代理不可用状态不正确: proxyHealth.available={ph_available}（期望 false）")
+            results[step] = ("FAIL", f"proxyHealth.available={ph_available}（期望 false）")
             exit_code = 1
     except Exception as e:
         fail(f"无法验证停止后的状态: {e}")
