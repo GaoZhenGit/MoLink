@@ -3,7 +3,6 @@ package com.molink.access;
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.MolinkProperties;
 import com.molink.access.forwarder.PortForwarder;
-import com.molink.access.status.Socks5HealthChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -35,14 +34,8 @@ public class AccessApplication {
     }
 
     @Bean
-    public Socks5HealthChecker socks5HealthChecker(MolinkProperties props) {
-        return new Socks5HealthChecker(props.getLocalPort());
-    }
-
-    @Bean
     public CommandLineRunner runner(MolinkProperties props, AdbClientManager adbClient,
-            PortForwarder portForwarder,
-            Socks5HealthChecker socks5HealthChecker) {
+            PortForwarder portForwarder) {
         return args -> {
             log.info("=== MoLink Access 启动 ===");
             log.info("本地代理端口: {}", props.getLocalPort());
@@ -65,10 +58,6 @@ public class AccessApplication {
                 log.error("端口转发启动失败: {}", e.getMessage(), e);
                 System.exit(1);
             }
-
-            // 启动 SOCKS 健康检查
-            socks5HealthChecker.start();
-            log.info("SOCKS health checker started");
 
             log.info("服务已启动，可通过 http://localhost:{}/api/status 查看状态", props.getApiPort());
         };
