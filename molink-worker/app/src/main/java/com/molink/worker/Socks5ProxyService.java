@@ -8,7 +8,10 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.SystemClock;
 
 import androidx.core.app.NotificationCompat;
 
@@ -19,6 +22,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Socks5ProxyService extends Service {
 
@@ -30,8 +34,11 @@ public class Socks5ProxyService extends Service {
     private ServerSocket serverSocketV4;
     private ServerSocket serverSocketV6;
     private volatile boolean isRunning = false;
+    private volatile long startTime = 0;
+    private final AtomicInteger connectionCount = new AtomicInteger(0);
     private Thread serverThreadV4;
     private Thread serverThreadV6;
+    private StatusHttpServer httpServer;
 
     private final IBinder binder = new LocalBinder();
 
@@ -53,6 +60,16 @@ public class Socks5ProxyService extends Service {
         Log.d(TAG, "onStartCommand, starting foreground");
         startForeground(NOTIFICATION_ID, createNotification());
         startSocks5Server();
+        // 启动 HTTP 状态服务
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                httpServer = new StatusHttpServer(8081, this);
+                httpServer.start();
+                Log.i(TAG, "HTTP status server started on port 8081");
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to start HTTP server: " + e.getMessage());
+            }
+        });
         return START_STICKY;
     }
 
@@ -63,6 +80,9 @@ public class Socks5ProxyService extends Service {
         isRunning = false;
         closeQuietly(serverSocketV4);
         closeQuietly(serverSocketV6);
+        if (httpServer != null) {
+            httpServer.stop();
+        }
     }
 
     @Override
@@ -76,6 +96,15 @@ public class Socks5ProxyService extends Service {
 
     public int getPort() {
         return SOCKS5_PORT;
+    }
+
+    public long getUptime() {
+        if (startTime == 0) return 0;
+        return SystemClock.elapsedRealtime() / 1000 - startTime;
+    }
+
+    public int getConnectionCount() {
+        return connectionCount.get();
     }
 
     private void closeQuietly(ServerSocket ss) {
@@ -114,6 +143,7 @@ public class Socks5ProxyService extends Service {
             return;
         }
         isRunning = true;
+        startTime = SystemClock.elapsedRealtime() / 1000;
 
         // 同时监听 IPv4 (127.0.0.1) 和 IPv6 (::1)，确保 ADB 端口转发过来的连接都能接收
         serverThreadV4 = new Thread(() -> {

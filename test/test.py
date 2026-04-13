@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import re
+import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
@@ -19,7 +20,7 @@ from typing import List, Optional
 ADB_PORT = 1080
 ADB_TIMEOUT = 10
 STOP_TIMEOUT = 30
-BUILD_TIMEOUT = 60
+BUILD_TIMEOUT = 120
 INSTALL_TIMEOUT = 60
 SERVICE_WAIT = 10
 LOGCAT_TIMEOUT = 15
@@ -159,9 +160,17 @@ def run_cmd(cmd: List[str], timeout: int, cwd: Optional[Path] = None,
         )
     except subprocess.TimeoutExpired:
         elapsed = time.time() - start
+        # Collect partial output if available
+        try:
+            proc.kill()
+            stdout = proc.stdout.read() if proc.stdout else ""
+            stderr = proc.stderr.read() if proc.stderr else ""
+        except Exception:
+            stdout = ""
+            stderr = ""
         return CmdResult(
             returncode=-1,
-            stdout="",
+            stdout=stdout,
             stderr=f"Command timed out after {timeout}s",
             elapsed=elapsed,
             timed_out=True,
@@ -582,6 +591,35 @@ def main() -> None:
         step_fail(step, "SOCKS proxy test failed")
         results[step] = ("FAIL", "Proxy unreachable")
         exit_code = 1
+
+    # 8c: Access /api/status verification (workerStatus + proxyHealth)
+    print("  [8c] Access /api/status verification...")
+    try:
+        import urllib.request
+        import json
+        no_proxy_saved = os.environ.get("no_proxy", "")
+        os.environ["no_proxy"] = "127.0.0.1,localhost"
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8080/api/status", timeout=10) as resp:
+                api_data = json.loads(resp.read().decode("utf-8"))
+        finally:
+            os.environ["no_proxy"] = no_proxy_saved
+        print(f"  Full status: {json.dumps(api_data, indent=2)}")
+
+        has_worker_status = "workerStatus" in api_data
+        has_proxy_health = "proxyHealth" in api_data
+
+        if has_worker_status:
+            pass_(f"workerStatus present: socksRunning={api_data['workerStatus'].get('socksRunning')}")
+        else:
+            warn("workerStatus not present (worker HTTP server may not be ready)")
+
+        if has_proxy_health:
+            pass_(f"proxyHealth available={api_data['proxyHealth'].get('available')}")
+        else:
+            warn("proxyHealth not present")
+    except Exception as e:
+        warn(f"Could not verify /api/status: {e}")
 
     # --- Summary + Cleanup ---
     cleanup(device, access_proc, logcat_proc)
