@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 向下箭头：c->s（下载），客户端通过代理下载数据 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,4L12,14M7,9L12,14L17,9"
+        android:strokeWidth="2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <!-- 向上箭头：s->c（上传），代理将数据返回客户端 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,20L12,10M7,15L12,10L17,15"
+        android:strokeWidth="2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

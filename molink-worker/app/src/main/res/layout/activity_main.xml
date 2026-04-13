@@ -3,31 +3,180 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="20dp"
-    android:gravity="center">
+    android:padding="16dp">
 
+    <!-- ===== 1. 服务状态区 ===== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <View
+            android:id="@+id/statusDot"
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:background="@drawable/circle_gray"/>
+
+        <TextView
+            android:id="@+id/statusRunning"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SOCKS5 服务已停止"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_marginStart="8dp"/>
+
+        <TextView
+            android:id="@+id/statusPort"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="14sp"
+            android:layout_marginStart="12dp"
+            android:visibility="gone"/>
+
+        <TextView
+            android:id="@+id/statusUptime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="14sp"
+            android:layout_marginStart="12dp"
+            android:visibility="gone"/>
+    </LinearLayout>
+
+    <!-- ===== 2. 统计指标区 ===== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#F5F5F5"
+        android:padding="12dp"
+        android:layout_marginBottom="12dp">
+
+        <!-- 当前连接 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="6dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="当前连接"
+                android:textSize="13sp"
+                android:textColor="#666666"/>
+
+            <TextView
+                android:id="@+id/connCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="--"
+                android:textSize="13sp"
+                android:textStyle="bold"/>
+        </LinearLayout>
+
+        <!-- 历史连接 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="6dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="历史连接"
+                android:textSize="13sp"
+                android:textColor="#666666"/>
+
+            <TextView
+                android:id="@+id/historyCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="--"
+                android:textSize="13sp"
+                android:textStyle="bold"/>
+        </LinearLayout>
+
+        <!-- 下载流量 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="6dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="下载流量"
+                android:textSize="13sp"
+                android:textColor="#666666"/>
+
+            <TextView
+                android:id="@+id/bytesDown"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="--"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#4CAF50"/>
+        </LinearLayout>
+
+        <!-- 上传流量 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="上传流量"
+                android:textSize="13sp"
+                android:textColor="#666666"/>
+
+            <TextView
+                android:id="@+id/bytesUp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="--"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#2196F3"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ===== 3. 连接日志标题 ===== -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="MoLink Worker"
-        android:textSize="24sp"
+        android:text="最近连接"
+        android:textSize="14sp"
         android:textStyle="bold"
-        android:layout_marginBottom="30dp"/>
+        android:layout_marginBottom="8dp"/>
 
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="SOCKS5 服务已停止"
-        android:textSize="18sp"
-        android:layout_marginBottom="30dp"
-        android:gravity="center"/>
+    <!-- ===== 4. 连接日志 RecyclerView（恒定高度 280dp）===== -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/connectionLogList"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:layout_marginBottom="12dp"
+        android:background="#FAFAFA"
+        android:padding="4dp"/>
 
+    <!-- ===== 5. 控制按钮 ===== -->
     <Button
         android:id="@+id/toggleButton"
-        android:layout_width="200dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="启动服务"
         android:onClick="onToggleClick"/>
-
 </LinearLayout>
