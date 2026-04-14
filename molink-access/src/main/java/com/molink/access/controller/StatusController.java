@@ -16,11 +16,11 @@ public class StatusController {
 
     private static final Logger log = LoggerFactory.getLogger(StatusController.class);
 
-    /** 测试 URL 列表，按优先级尝试 */
+    /** Test URLs, tried in order of priority */
     private static final List<String> TEST_URLS = Arrays.asList(
-            "https://www.baidu.com",
-            "https://httpbin.org/ip",
-            "https://myip.ipip.net"
+            "http://httpbin.org/ip",
+            "http://myip.ipip.net",
+            "http://ip.sb"
     );
 
     private final MolinkProperties props;
@@ -55,8 +55,8 @@ public class StatusController {
     }
 
     /**
-     * 用系统 curl 通过 SOCKS5h 代理测试连接，返回健康状态。
-     * 尝试多个 URL，有一个成功即视为代理可用。
+     * Test proxy connectivity via system curl with SOCKS5h, return health status.
+     * Tries multiple URLs; one success means proxy is available.
      */
     private Map<String, Object> testProxy() {
         int socksPort = props.getLocalPort();
@@ -110,25 +110,25 @@ public class StatusController {
                         reason = "HTTP " + httpCode;
                     }
                 } else if (exitCode == 22) {
-                    // curl 返回 22 表示 --fail 模式下服务器返回错误（4xx/5xx）
+                    // curl exit 22 means server returned error (4xx/5xx) in --fail mode
                     if (result.matches("\\d{3}.*")) {
                         reason = "HTTP " + result.split("\\|")[0];
                     } else {
-                        reason = "连接失败";
+                        reason = "Connection failed";
                     }
                 } else if (exitCode == 28) {
-                    reason = "连接超时";
+                    reason = "Connection timeout";
                 } else if (exitCode == 7 || exitCode == 56) {
-                    reason = "端口不可达";
+                    reason = "Port unreachable";
                 } else if (exitCode != 0) {
                     reason = "curl exit " + exitCode;
                 }
             } catch (NumberFormatException e) {
-                reason = "响应解析失败";
+                reason = "Response parse failed";
             } catch (Exception e) {
                 reason = e.getClass().getSimpleName();
             }
-            // 当前 URL 失败，尝试下一个
+            // Current URL failed, try next one
             break;
         }
 
