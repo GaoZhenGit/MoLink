@@ -2,5 +2,5 @@ molink:
   local-port: ${MOLINK_LOCAL_PORT:1080}
   remote-port: ${MOLINK_REMOTE_PORT:1081}
   api-port: ${MOLINK_API_PORT:8080}
-  socks-username: ${MOLINK_SOCKS_USERNAME:}
-  socks-password: ${MOLINK_SOCKS_PASSWORD:}
+  socks-username: ${MOLINK_SOCKS_USERNAME:socks5}
+  socks-password: ${MOLINK_SOCKS_PASSWORD:password123}

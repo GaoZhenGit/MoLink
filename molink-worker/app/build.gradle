@@ -13,8 +13,8 @@ android {
         versionName "1.0"
         buildConfigField "int",    "SOCKS_PORT",           "1081"
         buildConfigField "int",    "STATUS_HTTP_PORT",     "8081"
-        buildConfigField "String", "SOCKS_USERNAME",      "\"admin\""
-        buildConfigField "String", "SOCKS_PASSWORD",      "\"password\""
+        buildConfigField "String", "SOCKS_USERNAME",      "\"socks5\""
+        buildConfigField "String", "SOCKS_PASSWORD",      "\"password123\""
     }
 
     buildFeatures {
