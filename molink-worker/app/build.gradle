@@ -11,8 +11,10 @@ android {
         targetSdkVersion 31
         versionCode 1
         versionName "1.0"
-        buildConfigField "int", "SOCKS_PORT", "1081"
-        buildConfigField "int", "STATUS_HTTP_PORT", "8081"
+        buildConfigField "int",    "SOCKS_PORT",           "1081"
+        buildConfigField "int",    "STATUS_HTTP_PORT",     "8081"
+        buildConfigField "String", "SOCKS_USERNAME",      "\"admin\""
+        buildConfigField "String", "SOCKS_PASSWORD",      "\"password\""
     }
 
     buildFeatures {
