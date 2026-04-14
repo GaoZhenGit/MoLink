@@ -37,29 +37,44 @@ public class AccessApplication {
     public CommandLineRunner runner(MolinkProperties props, AdbClientManager adbClient,
             PortForwarder portForwarder) {
         return args -> {
-            log.info("=== MoLink Access 启动 ===");
-            log.info("本地代理端口: {}", props.getLocalPort());
-            log.info("远端端口: {}", props.getRemotePort());
-            log.info("API 端口: {}", props.getApiPort());
+            log.info("=== MoLink Access Starting ===");
+            log.info("Local proxy port: {}", props.getLocalPort());
+            log.info("Remote port: {}", props.getRemotePort());
+            log.info("API port: {}", props.getApiPort());
 
-            // 连接 ADB
-            if (!adbClient.connect()) {
-                log.error("ADB 连接失败，程序退出");
-                System.exit(1);
-            }
+            // Set up callbacks first (avoid race where background thread connects before callback is registered)
+            adbClient.setOnConnected(dadb -> {
+                try {
+                    portForwarder.start();
+                    log.info("Port forward ready, proxy available -> localhost:{}", props.getLocalPort());
+                } catch (Exception e) {
+                    log.error("Port forward start failed: {}", e.getMessage(), e);
+                }
+            });
 
-            // 启动自动重连
+            adbClient.setOnDisconnected(() -> {
+                portForwarder.stop();
+                log.warn("Device disconnected, waiting for reconnect...");
+            });
+
+            // Start background reconnect thread (continuously monitors for device)
             adbClient.startAutoReconnect();
 
-            // 启动端口转发
-            try {
-                portForwarder.start();
-            } catch (Exception e) {
-                log.error("端口转发启动失败: {}", e.getMessage(), e);
-                System.exit(1);
+            // Wait for device connection (blocks until device is connected)
+            log.info("Waiting for Android device...");
+            adbClient.waitForConnection();
+
+            // Device is now connected; manually trigger onConnected to ensure port forward is started
+            if (adbClient.isConnected()) {
+                try {
+                    portForwarder.start();
+                    log.info("Port forward ready, proxy available -> localhost:{}", props.getLocalPort());
+                } catch (Exception e) {
+                    log.error("Port forward start failed: {}", e.getMessage(), e);
+                }
             }
 
-            log.info("服务已启动，可通过 http://localhost:{}/api/status 查看状态", props.getApiPort());
+            log.info("Service ready, check status at http://localhost:{}/api/status", props.getApiPort());
         };
     }
 }

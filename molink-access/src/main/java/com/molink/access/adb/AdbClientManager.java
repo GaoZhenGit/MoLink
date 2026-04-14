@@ -7,19 +7,29 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 public class AdbClientManager {
 
     private static final Logger log = LoggerFactory.getLogger(AdbClientManager.class);
+
+    public enum ConnectionState { WAITING, CONNECTED, DISCONNECTED }
 
     private Dadb dadb;
     private String deviceSerial;
     private ExecutorService executor;
     private volatile boolean connected = false;
     private volatile boolean running = true;
+
+    private final CountDownLatch connectedLatch = new CountDownLatch(1);
+    private volatile ConnectionState state = ConnectionState.DISCONNECTED;
+
+    private Consumer<Dadb> onConnectedCallback;
+    private Runnable onDisconnectedCallback;
 
     private final AtomicInteger reconnectCount = new AtomicInteger(0);
     private volatile long startTime = 0;
@@ -30,31 +40,40 @@ public class AdbClientManager {
 
     public boolean connect() {
         try {
-            // 使用 Dadb.discover() 自动发现已连接的设备
+            // Use Dadb.discover() to auto-detect connected devices
             dadb = Dadb.discover();
 
             if (dadb != null) {
                 connected = true;
+                state = ConnectionState.CONNECTED;
+                connectedLatch.countDown();
                 startTime = System.currentTimeMillis();
-                // 通过 Dadb.list() 获取设备序列号
+                // Get device serial via Dadb.list()
                 try {
                     java.util.List<dadb.Dadb> devices = Dadb.list();
                     for (dadb.Dadb d : devices) {
-                        // 找到当前连接的设备
+                        // Find the currently connected device
                         this.deviceSerial = d.toString();
                         break;
                     }
                 } catch (Exception e) {
-                    log.debug("无法获取设备序列号: {}", e.getMessage());
+                    log.debug("Failed to get device serial: {}", e.getMessage());
                 }
-                log.info("ADB 连接成功，设备: {}", this.deviceSerial);
+                log.info("ADB connected, device: {}", this.deviceSerial);
+                if (onConnectedCallback != null) {
+                    onConnectedCallback.accept(dadb);
+                }
                 return true;
             } else {
-                log.warn("未发现已连接的 ADB 设备");
+                log.warn("No ADB device found, entering wait mode...");
+                connected = false;
+                state = ConnectionState.WAITING;
                 return false;
             }
         } catch (Exception e) {
-            log.error("ADB 连接失败: {}", e.getMessage(), e);
+            log.error("ADB connection failed: {}", e.getMessage(), e);
+            connected = false;
+            state = ConnectionState.WAITING;
             return false;
         }
     }
@@ -63,8 +82,17 @@ public class AdbClientManager {
         executor.submit(() -> {
             while (running) {
                 if (!connected || !isDeviceConnected()) {
+                    if (connected && !isDeviceConnected()) {
+                        // Device unexpectedly disconnected
+                        connected = false;
+                        state = ConnectionState.DISCONNECTED;
+                        log.warn("ADB device disconnected");
+                        if (onDisconnectedCallback != null) {
+                            onDisconnectedCallback.run();
+                        }
+                    }
                     int count = reconnectCount.incrementAndGet();
-                    log.info("正在尝试重连... (第 {} 次)", count);
+                    log.info("Attempting to connect device... (attempt #{})", count);
                     connect();
                 }
                 try {
@@ -76,12 +104,29 @@ public class AdbClientManager {
         });
     }
 
+    public void waitForConnection() {
+        if (connected) return;
+        try {
+            connectedLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public void setOnConnected(Consumer<Dadb> callback) {
+        this.onConnectedCallback = callback;
+    }
+
+    public void setOnDisconnected(Runnable callback) {
+        this.onDisconnectedCallback = callback;
+    }
+
     public boolean isDeviceConnected() {
         if (dadb == null) return false;
         try {
             return true;
         } catch (Exception e) {
-            log.warn("ADB 设备连接检查失败: {}", e.getMessage());
+            log.warn("ADB device connection check failed: {}", e.getMessage());
             return false;
         }
     }
@@ -91,28 +136,28 @@ public class AdbClientManager {
     }
 
     /**
-     * 打开到设备指定地址的 ADB 流
-     * @param address 目标地址，如 "tcp:localhost:1080"
-     * @return ADB 流
+     * Open an ADB stream to the device at the given address
+     * @param address target address, e.g. "tcp:localhost:1080"
+     * @return ADB stream
      */
     public AdbStream openStream(String address) throws IOException {
         if (dadb == null) {
-            throw new IOException("ADB 连接未建立");
+            throw new IOException("ADB not connected");
         }
         return dadb.open(address);
     }
 
     /**
-     * 建立 TCP 端口转发
-     * @param localPort 本地端口
-     * @param remotePort 远端端口（Android 设备上的端口）
-     * @return AutoCloseable，关闭时取消转发
+     * Establish TCP port forwarding
+     * @param localPort local port
+     * @param remotePort remote port (port on Android device)
+     * @return AutoCloseable, close to cancel the forward
      */
     public AutoCloseable forward(int localPort, int remotePort) throws IOException, InterruptedException {
         if (dadb == null) {
-            throw new IOException("ADB 连接未建立");
+            throw new IOException("ADB not connected");
         }
-        // 创建 TcpForwarder 并启动
+        // Create and start TcpForwarder
         TcpForwarder forwarder = new TcpForwarder(dadb, localPort, remotePort);
         forwarder.start();
         return forwarder;
@@ -125,7 +170,7 @@ public class AdbClientManager {
             try {
                 dadb.close();
             } catch (Exception e) {
-                log.warn("关闭 ADB 连接时出错: {}", e.getMessage());
+                log.warn("Error closing ADB connection: {}", e.getMessage());
             }
         }
         executor.shutdown();
@@ -133,6 +178,10 @@ public class AdbClientManager {
 
     public boolean isConnected() {
         return connected;
+    }
+
+    public ConnectionState getState() {
+        return state;
     }
 
     public String getDeviceSerial() {
