@@ -26,6 +26,10 @@ SERVICE_WAIT = 10
 LOGCAT_TIMEOUT = 15
 PROXY_TIMEOUT = 30
 
+# SOCKS5 认证测试凭证（需与 molink-worker/app/build.gradle 中 BuildConfig 保持一致）
+SOCKS_AUTH_USER = "admin"
+SOCKS_AUTH_PASS = "password"
+
 PROJECT_ROOT = Path("D:/project/MoLink")
 WORKER_DIR = PROJECT_ROOT / "molink-worker"
 ACCESS_DIR = PROJECT_ROOT / "molink-access"
@@ -85,11 +89,16 @@ def warn(msg: str) -> None:
     print(_colored(f"  {msg}", "yellow"))
 
 
-def step_ok(step: int, desc: str, elapsed: int) -> None:
-    print(_colored(f"[{step}] OK {desc} ({elapsed}s)", "green"))
+def step_start(step: str, title: str) -> None:
+    """打印步骤开始行（cyan）。"""
+    print(_colored(f"[{step}] {title}", "cyan"))
 
 
-def step_fail(step: int, desc: str) -> None:
+def step_ok(step: str, desc: str, elapsed: int) -> None:
+    print(_colored(f"[{step}] PASS {desc} ({elapsed}s)", "green"))
+
+
+def step_fail(step: str, desc: str) -> None:
     print(_colored(f"[{step}] FAIL {desc}", "red"))
 
 
@@ -342,9 +351,14 @@ def test_direct_connection(curl: str, urls: List[str]) -> tuple:
     return (False, urls[-1], 0)
 
 
-def test_socks_proxy(curl: str, urls: List[str]) -> tuple:
+def test_socks_proxy(curl: str, urls: List[str],
+                    username: Optional[str] = None,
+                    password: Optional[str] = None) -> tuple:
     """Test HTTP via SOCKS5h proxy. Returns (passed, url, elapsed)."""
-    proxy_url = f"socks5h://127.0.0.1:{ADB_PORT}"
+    if username and password:
+        proxy_url = f"socks5h://{username}:{password}@127.0.0.1:{ADB_PORT}"
+    else:
+        proxy_url = f"socks5h://127.0.0.1:{ADB_PORT}"
     for url in urls:
         start = time.time()
         cmd = [curl, "-i", "-x", proxy_url, url, "--max-time", str(PROXY_TIMEOUT)]
@@ -432,11 +446,12 @@ def main() -> None:
     print("")
     print(f"{'='*50}" + " MoLink E2E Test " + "="*(16))
     print(f"Start: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("")
 
     # --- Step 1: Detect ADB device ---
     step = "1"
     t = time.time()
-    print(f"[{step}] Detect ADB device...")
+    step_start(step, "Detect ADB device")
     r = run_cmd(["adb", "devices"], timeout=ADB_TIMEOUT)
     device = parse_device_from_adb_devices(r.stdout)
     elapsed = int(time.time() - t)
@@ -446,11 +461,12 @@ def main() -> None:
         summary_and_exit(device, results, start_time, 1)
     step_ok(step, f"ADB device {device} detected", elapsed)
     results[step] = ("PASS", f"Device {device}")
+    print("")
 
     # --- Step 2: Stop old services + verify ---
     step = "2"
     t = time.time()
-    print(f"[{step}] Stop old services...")
+    step_start(step, "Stop old services")
     stop_access_service()
     stop_worker_service(device)
     time.sleep(2)
@@ -463,20 +479,22 @@ def main() -> None:
         summary_and_exit(device, results, start_time, 1)
     step_ok(step, "Services stopped and verified", elapsed)
     results[step] = ("PASS", "Services stopped")
+    print("")
 
     # --- Step 3: Cleanup logs ---
     step = "3"
     t = time.time()
-    print(f"[{step}] Cleanup logs...")
+    step_start(step, "Cleanup logs")
     cleanup_logs()
     elapsed = int(time.time() - t)
     step_ok(step, "Logs cleaned", elapsed)
     results[step] = ("PASS", "Logs cleaned")
+    print("")
 
     # --- Step 4: Build worker ---
     step = "4"
     t = time.time()
-    print(f"[{step}] Build worker (Android)...")
+    step_start(step, "Build worker (Android)")
     r = build_worker()
     elapsed = int(time.time() - t)
     if r.timed_out or r.returncode != 0 or "BUILD SUCCESSFUL" not in r.stdout:
@@ -485,11 +503,12 @@ def main() -> None:
         summary_and_exit(device, results, start_time, 1)
     step_ok(step, "Worker built", elapsed)
     results[step] = ("PASS", f"Built in {elapsed}s")
+    print("")
 
     # --- Step 5: Build access ---
     step = "5"
     t = time.time()
-    print(f"[{step}] Build access (Windows)...")
+    step_start(step, "Build access (Windows)")
     r = build_access()
     elapsed = int(time.time() - t)
     if r.timed_out or r.returncode != 0 or not ACCESS_JAR.exists():
@@ -498,22 +517,23 @@ def main() -> None:
         summary_and_exit(device, results, start_time, 1)
     step_ok(step, "Access built", elapsed)
     results[step] = ("PASS", f"Built in {elapsed}s")
+    print("")
 
-    # --- Step 6: Start logcat (BEFORE starting worker service) ---
+    # --- Step 6: Start logcat ---
     step = "6"
     t = time.time()
-    print(f"[{step}] Start logcat (background)...")
+    step_start(step, "Start logcat (background)")
     run_cmd(["adb", "-s", device, "logcat", "-c"], timeout=10)
     logcat_proc = start_logcat(device)
     elapsed = int(time.time() - t)
     step_ok(step, "Logcat started", elapsed)
     results[step] = ("PASS", "Logcat collecting")
+    print("")
 
     # --- Step 7: Start services ---
     step = "7"
     t = time.time()
-    print(f"[{step}] Start services...")
-
+    step_start(step, "Start services")
     if APK_PATH.exists():
         info("Installing APK...")
         r = run_cmd(["adb", "-s", device, "install", "-r", str(APK_PATH)],
@@ -528,6 +548,11 @@ def main() -> None:
             timeout=10, print_output=True,
         )
         print(r.stdout)
+        if r.returncode != 0:
+            step_fail(step, "MainActivity launch failed")
+            results[step] = ("FAIL", "MainActivity launch failed")
+            cleanup(device, access_proc, logcat_proc)
+            summary_and_exit(device, results, start_time, 1)
         time.sleep(2)
 
     info("Starting worker service...")
@@ -537,15 +562,24 @@ def main() -> None:
         timeout=15, print_output=True,
     )
     print(r.stdout)
+    if r.returncode != 0:
+        step_fail(step, "Worker service start failed")
+        results[step] = ("FAIL", "Worker service start failed")
+        cleanup(device, access_proc, logcat_proc)
+        summary_and_exit(device, results, start_time, 1)
     time.sleep(SERVICE_WAIT)
 
     info("Starting access...")
+    access_env = os.environ.copy()
+    access_env["MOLINK_SOCKS_USERNAME"] = SOCKS_AUTH_USER
+    access_env["MOLINK_SOCKS_PASSWORD"] = SOCKS_AUTH_PASS
     access_proc = subprocess.Popen(
         [shutil.which("java") or "java",
          "-Dfile.encoding=UTF-8", "-jar", str(ACCESS_JAR)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=str(PROJECT_ROOT),
+        env=access_env,
     )
     time.sleep(5)
 
@@ -564,36 +598,63 @@ def main() -> None:
         summary_and_exit(device, results, start_time, 1)
     step_ok(step, "Services started", elapsed)
     results[step] = ("PASS", "All services running")
+    print("")
 
     # --- Step 8: Curl tests ---
     step = "8"
     t = time.time()
-    print(f"[{step}] Curl tests...")
+    step_start(step, "Curl tests")
     curl = get_curl_cmd()
     elapsed = int(time.time() - t)
 
     # 8a: Direct connection
-    print("  [8a] Direct connection test...")
+    info("[8a] Direct connection")
     direct_passed, direct_url, direct_elapsed = test_direct_connection(curl, TEST_URLS)
     if direct_passed:
-        pass_(f"Direct OK: {direct_url}")
+        pass_(f"[8a] PASS Direct OK via {direct_url}")
+        results["8a"] = ("PASS", f"Direct OK via {direct_url}")
     else:
-        warn("Direct connection unreachable (network issue)")
+        warn(f"[8a] WARN Direct unreachable")
+        results["8a"] = ("WARN", "Direct unreachable")
 
-    # 8b: SOCKS proxy (core test)
-    print("  [8b] SOCKS proxy test...")
-    proxy_passed, proxy_url, proxy_elapsed = test_socks_proxy(curl, TEST_URLS)
-    elapsed = int(time.time() - t)
-    if proxy_passed:
-        step_ok(step, f"SOCKS proxy OK ({proxy_url})", elapsed)
-        results[step] = ("PASS", f"Proxy OK via {proxy_url}")
+    # 8b: SOCKS proxy — WRONG credentials → expect FAIL
+    info("[8b] SOCKS proxy (wrong credentials)")
+    wrong_passed, _, _ = test_socks_proxy(
+        curl, TEST_URLS, username="admin", password="wrongpassword")
+    if not wrong_passed:
+        pass_("[8b] PASS Wrong credentials rejected")
+        results["8b"] = ("PASS", "Wrong credentials rejected")
     else:
-        step_fail(step, "SOCKS proxy test failed")
-        results[step] = ("FAIL", "Proxy unreachable")
+        fail("[8b] FAIL Wrong credentials accepted (should be rejected)")
+        results["8b"] = ("FAIL", "Wrong credentials accepted")
         exit_code = 1
 
-    # 8c: Access /api/status verification（请求时实时 curl 测试代理）
-    print("  [8c] Access /api/status verification (curl)...")
+    # 8c: SOCKS proxy — NO credentials → expect FAIL
+    info("[8c] SOCKS proxy (no credentials)")
+    noauth_passed, _, _ = test_socks_proxy(curl, TEST_URLS)
+    if not noauth_passed:
+        pass_("[8c] PASS No credentials rejected")
+        results["8c"] = ("PASS", "No credentials rejected")
+    else:
+        fail("[8c] FAIL No credentials accepted (should be rejected)")
+        results["8c"] = ("FAIL", "No credentials accepted")
+        exit_code = 1
+
+    # 8d: SOCKS proxy — CORRECT credentials → expect PASS
+    info("[8d] SOCKS proxy (correct credentials)")
+    proxy_passed, proxy_url, proxy_elapsed = test_socks_proxy(
+        curl, TEST_URLS, username=SOCKS_AUTH_USER, password=SOCKS_AUTH_PASS)
+    elapsed = int(time.time() - t)
+    if proxy_passed:
+        pass_(f"[8d] PASS SOCKS proxy OK via {proxy_url} ({proxy_elapsed}s)")
+        results["8d"] = ("PASS", f"Proxy OK via {proxy_url}")
+    else:
+        fail(f"[8d] FAIL SOCKS proxy unreachable with correct credentials")
+        results["8d"] = ("FAIL", "Proxy unreachable with correct auth")
+        exit_code = 1
+
+    # 8e: Access /api/status verification
+    info("[8e] Access /api/status verification")
     curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
     print(f"  $ {' '.join(curl_cmd)}")
     r = run_cmd(curl_cmd, timeout=20, print_output=True)
@@ -603,54 +664,55 @@ def main() -> None:
         import json
         api_data = json.loads(r.stdout)
         print(f"  Pretty:\n{json.dumps(api_data, indent=2)}")
-
         ph = api_data.get("proxyHealth", {})
         ph_available = ph.get("available", None)
-
         if ph_available is True:
-            pass_(f"proxyHealth available=true, latencyMs={ph.get('latencyMs')}")
+            pass_(f"[8e] PASS proxyHealth available, latency={ph.get('latencyMs')}ms")
+            results["8e"] = ("PASS", f"proxyHealth available, latency={ph.get('latencyMs')}ms")
         else:
-            warn(f"proxyHealth available={ph_available}（SOCKS 代理尚未就绪或有延迟）")
+            warn(f"[8e] WARN proxyHealth available={ph_available}")
+            results["8e"] = ("WARN", f"proxyHealth available={ph_available}")
     except Exception as e:
-        warn(f"Could not verify /api/status: {e}")
+        warn(f"[8e] WARN Could not verify /api/status: {e}")
+        results["8e"] = ("WARN", f"JSON parse error: {e}")
+    print("")
 
-    # --- Step 8d: Worker 停止后 /api/status 应正确反映 SOCKS 不可用 ---
-    step = "8d"
+    # --- Step 9: Worker 停止后 SOCKS 代理不可用验证 ---
+    step = "9"
     t = time.time()
-    print(f"[{step}] Worker 停止后 SOCKS 代理不可用验证...")
+    step_start(step, "Worker 停止后 SOCKS 代理不可用验证")
     info("Stopping worker service...")
     run_cmd(
         ["adb", "-s", device, "shell", "am", "force-stop", "com.molink.worker"],
         timeout=STOP_TIMEOUT, print_output=True,
     )
+    time.sleep(2)
 
-    # GET /api/status，触发实时 curl 测试 SOCKS 代理
     curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
     print(f"  $ {' '.join(curl_cmd)}")
     r = run_cmd(curl_cmd, timeout=20, print_output=True)
     print(f"  Response:\n{r.stdout}")
 
+    elapsed = int(time.time() - t)
     try:
         import json
         api_data_after_stop = json.loads(r.stdout)
         ph = api_data_after_stop.get("proxyHealth", {})
-
         ph_available = ph.get("available", None)
         unavailable_reason = ph.get("unavailableReason", "")
-
-        print(f"  proxyHealth: available={ph_available}, unavailableReason={unavailable_reason}")
-
+        print(f"  proxyHealth: available={ph_available}, reason={unavailable_reason}")
         if ph_available is False:
-            pass_(f"SOCKS 代理不可用状态正确: available={ph_available}, reason={unavailable_reason}")
-            results[step] = ("PASS", f"proxyHealth.available={ph_available}, reason={unavailable_reason}")
+            step_ok(step, f"SOCKS proxy unavailable after stop (reason={unavailable_reason})", elapsed)
+            results[step] = ("PASS", f"available={ph_available}, reason={unavailable_reason}")
         else:
-            fail(f"SOCKS 代理不可用状态不正确: proxyHealth.available={ph_available}（期望 false）")
-            results[step] = ("FAIL", f"proxyHealth.available={ph_available}（期望 false）")
+            step_fail(step, f"proxyHealth.available={ph_available} (expected false)")
+            results[step] = ("FAIL", f"available={ph_available} (expected false)")
             exit_code = 1
     except Exception as e:
         fail(f"无法验证停止后的状态: {e}")
-        results[step] = ("FAIL", f"异常: {e}")
+        results[step] = ("FAIL", f"Exception: {e}")
         exit_code = 1
+    print("")
 
     # --- Summary + Cleanup ---
     cleanup(device, access_proc, logcat_proc)

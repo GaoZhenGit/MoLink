@@ -60,6 +60,12 @@ public class StatusController {
      */
     private Map<String, Object> testProxy() {
         int socksPort = props.getLocalPort();
+        String socksUser = props.getSocksUsername();
+        String socksPass = props.getSocksPassword();
+        String proxyHost = "127.0.0.1:" + socksPort;
+        if (!socksUser.isEmpty() && !socksPass.isEmpty()) {
+            proxyHost = socksUser + ":" + socksPass + "@" + proxyHost;
+        }
         String reason = "";
         long latencyMs = -1;
 
@@ -70,7 +76,7 @@ public class StatusController {
                         "-w", "%{http_code}|%{time_total}",
                         "--connect-timeout", "5",
                         "--max-time", "10",
-                        "-x", "socks5h://127.0.0.1:" + socksPort,
+                        "-x", "socks5h://" + proxyHost,
                         testUrl
                 );
                 ProcessBuilder pb = new ProcessBuilder(cmd);

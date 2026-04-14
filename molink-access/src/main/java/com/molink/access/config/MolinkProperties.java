@@ -12,6 +12,8 @@ public class MolinkProperties {
     private int remotePort = 1080;
     private int apiPort = 8080;
     private String configPath = "config.properties";
+    private String socksUsername = "";
+    private String socksPassword = "";
 
     public int getLocalPort() {
         return localPort;
@@ -43,5 +45,21 @@ public class MolinkProperties {
 
     public void setConfigPath(String configPath) {
         this.configPath = configPath;
+    }
+
+    public String getSocksUsername() {
+        return socksUsername;
+    }
+
+    public void setSocksUsername(String socksUsername) {
+        this.socksUsername = socksUsername;
+    }
+
+    public String getSocksPassword() {
+        return socksPassword;
+    }
+
+    public void setSocksPassword(String socksPassword) {
+        this.socksPassword = socksPassword;
     }
 }

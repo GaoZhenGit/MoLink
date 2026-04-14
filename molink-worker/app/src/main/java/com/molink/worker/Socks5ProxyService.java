@@ -36,6 +36,8 @@ public class Socks5ProxyService extends Service {
     private static final String TAG = "Socks5ProxyService";
     private static final int SOCKS5_PORT = BuildConfig.SOCKS_PORT;
     private static final int STATUS_HTTP_PORT = BuildConfig.STATUS_HTTP_PORT;
+    private static final String SOCKS_USERNAME = BuildConfig.SOCKS_USERNAME;
+    private static final String SOCKS_PASSWORD = BuildConfig.SOCKS_PASSWORD;
     private static final String CHANNEL_ID = "Socks5ProxyChannel";
     private static final int NOTIFICATION_ID = 1;
 
@@ -279,10 +281,36 @@ public class Socks5ProxyService extends Service {
                 return;
             }
 
-            // 发送无认证响应
+            // 检查客户端是否支持用户名/密码认证（0x02）
+            boolean clientSupportsUserPass = false;
+            for (int i = 0; i < nMethods; i++) {
+                if (methods[i] == 0x02) {
+                    clientSupportsUserPass = true;
+                    break;
+                }
+            }
+
+            if (!clientSupportsUserPass) {
+                // 客户端不支持认证，发送 no-auth 并拒绝连接
+                Log.w(TAG, "Client does not support username/password auth");
+                out.write(0x05);
+                out.write(0xFF); // no acceptable methods
+                out.flush();
+                clientSocket.close();
+                return;
+            }
+
+            // 发送 User/Pass 认证响应
             out.write(0x05);
-            out.write(0x00);
+            out.write(0x02); // METHOD_USER_PASSWORD
             out.flush();
+
+            // RFC 1929 用户名/密码认证子协商
+            if (!handleUserAuth(in, out)) {
+                // 认证失败，handleUserAuth 已发送失败响应，关闭连接
+                clientSocket.close();
+                return;
+            }
 
             // 读取连接请求
             ver = in.read();
@@ -390,6 +418,61 @@ public class Socks5ProxyService extends Service {
             if (read == -1) throw new IOException("Unexpected end of stream");
             off += read;
         }
+    }
+
+    /**
+     * 处理 RFC 1929 用户名/密码认证子协商。
+     * @param in  客户端输入流
+     * @param out 客户端输出流
+     * @return true=认证成功，false=认证失败（方法外部负责关闭连接）
+     */
+    private boolean handleUserAuth(InputStream in, OutputStream out) throws IOException {
+        int version = in.read();
+        if (version != 0x01) {
+            Log.w(TAG, "Unknown auth sub-negotiation version: " + version);
+            return false;
+        }
+
+        int userLen = in.read();
+        if (userLen < 0 || userLen > 255) {
+            Log.w(TAG, "Invalid username length: " + userLen);
+            return false;
+        }
+
+        byte[] userBytes = new byte[userLen];
+        readFully(in, userBytes);
+        String username = new String(userBytes);
+
+        int passLen = in.read();
+        if (passLen < 0 || passLen > 255) {
+            Log.w(TAG, "Invalid password length: " + passLen);
+            return false;
+        }
+
+        byte[] passBytes = new byte[passLen];
+        readFully(in, passBytes);
+        String password = new String(passBytes);
+
+        // 凭证验证：空字符串视为未配置，跳过认证
+        if (SOCKS_USERNAME.isEmpty() || SOCKS_PASSWORD.isEmpty()) {
+            Log.i(TAG, "Auth not configured, skipping verification");
+            out.write(0x01);
+            out.write(0x00);
+            out.flush();
+            return true;
+        }
+
+        boolean success = SOCKS_USERNAME.equals(username) && SOCKS_PASSWORD.equals(password);
+        out.write(0x01);
+        out.write(success ? 0x00 : 0x01); // 0x00=成功，0x01=失败
+        out.flush();
+
+        if (success) {
+            Log.i(TAG, "Auth success for user: " + username);
+        } else {
+            Log.w(TAG, "Auth failed for user: " + username);
+        }
+        return success;
     }
 
     private void forward(Socket src, Socket dest, String direction, ConnectionRecord record) {
