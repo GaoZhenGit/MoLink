@@ -8,6 +8,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdapter.ViewHolder> {
@@ -44,20 +45,27 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         notifyItemInserted(0);
     }
 
-    /** 全量更新（由 Handler 定时刷新时调用）。过滤掉 localhost/dadb tunnel 流量，超量时裁剪旧记录。 */
+    /** 全量更新（由 Handler 定时刷新时调用）。过滤掉 localhost/dadb tunnel 流量，超量时裁剪旧记录。最新连接显示在底部。 */
     public void refreshAll(List<ConnectionRecord> newItems) {
         items.clear();
+        // activeConnections  newest-first，所以先反转：oldest-first，再取前 MAX_ITEMS
+        List<ConnectionRecord> filtered = new ArrayList<>();
         for (ConnectionRecord r : newItems) {
-            // 过滤掉 localhost 和 HTTP status server 端口（dadb tunnel / /api/status 请求）
             if (r == null) continue;
             String host = r.targetHost;
             if (host == null) continue;
             boolean isLocalhost = host.startsWith("127.") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1");
             boolean isStatusPort = r.targetPort == BuildConfig.STATUS_HTTP_PORT;
             if (!isLocalhost && !isStatusPort) {
-                if (items.size() >= MAX_ITEMS) break;
-                items.add(r);
+                filtered.add(r);
             }
+        }
+        // 反转： newest-first → oldest-first
+        Collections.reverse(filtered);
+        // 取最近的 MAX_ITEMS 条（反转后末尾是最新的）
+        int start = Math.max(0, filtered.size() - MAX_ITEMS);
+        for (int i = start; i < filtered.size(); i++) {
+            items.add(filtered.get(i));
         }
         notifyDataSetChanged();
     }
