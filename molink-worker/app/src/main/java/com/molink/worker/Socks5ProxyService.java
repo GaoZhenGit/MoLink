@@ -496,8 +496,16 @@ public class Socks5ProxyService extends Service {
                 }
                 // === 统计注入结束 ===
             }
+            record.active = false;
         } catch (IOException e) {
-            // 连接正常关闭
+            String msg = e.getMessage();
+            if (msg == null || (!msg.contains("Socket closed")
+                    && !msg.contains("Connection reset")
+                    && !msg.contains("Broken pipe")
+                    && !msg.contains("EOF"))) {
+                record.failed = true;
+            }
+            record.active = false;
         }
     }
 }
