@@ -44,7 +44,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         notifyItemInserted(0);
     }
 
-    /** 全量更新（由 Handler 定时刷新时调用）。过滤掉 localhost/dadb tunnel 流量。 */
+    /** 全量更新（由 Handler 定时刷新时调用）。过滤掉 localhost/dadb tunnel 流量，超量时裁剪旧记录。 */
     public void refreshAll(List<ConnectionRecord> newItems) {
         items.clear();
         for (ConnectionRecord r : newItems) {
@@ -55,6 +55,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
             boolean isLocalhost = host.startsWith("127.") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1");
             boolean isStatusPort = r.targetPort == BuildConfig.STATUS_HTTP_PORT;
             if (!isLocalhost && !isStatusPort) {
+                if (items.size() >= MAX_ITEMS) break;
                 items.add(r);
             }
         }
@@ -70,7 +71,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         ViewHolder(@NonNull View itemView) {
             super(itemView);
             dot = itemView.findViewById(R.id.connDot);
-            targetHost = itemView.findViewById(R.id.targetHost);
+            targetHost = itemView.findViewById(R.id.connTargetHost);
             traffic = itemView.findViewById(R.id.connTraffic);
             duration = itemView.findViewById(R.id.connDuration);
         }
@@ -78,17 +79,20 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         void bind(ConnectionRecord record) {
             targetHost.setText(record.getDisplayHost());
 
-            long down = record.getBytesDown();
-            long up = record.getBytesUp();
-            traffic.setText("↓" + formatBytes(down) + " ↑" + formatBytes(up));
+            // bytesDown = c->s = 用户上传 = ↑ ; bytesUp = s->c = 用户下载 = ↓
+            long up = record.getBytesDown();
+            long down = record.getBytesUp();
+            traffic.setText("\u2193 " + formatBytes(down) + "  \u2191 " + formatBytes(up));
 
             long secs = record.getDurationSec();
             duration.setText(formatDuration(secs));
 
-            if (record.active) {
-                dot.setBackgroundResource(R.drawable.circle_green);
+            if (record.failed) {
+                dot.setBackgroundResource(R.drawable.circle_red);
+            } else if (record.active) {
+                dot.setBackgroundResource(R.drawable.circle_yellow);
             } else {
-                dot.setBackgroundResource(R.drawable.circle_gray);
+                dot.setBackgroundResource(R.drawable.circle_green);
             }
         }
 
@@ -101,7 +105,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
 
         private static String formatDuration(long secs) {
             if (secs < 0) return "0s";
-            if (secs < 60) return secs + "s";
+            if (secs < 60) return "1\u5206\u5185";
             if (secs < 3600) return (secs / 60) + "m";
             return String.format("%.1fh", secs / 3600.0);
         }

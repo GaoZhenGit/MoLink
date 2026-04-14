@@ -47,8 +47,8 @@ public class MainActivity extends Activity {
                     runOnUiThread(() -> {
                         connCount.setText(String.valueOf(connectionCountVal));
                         historyCount.setText(String.valueOf(historyCountVal));
-                        bytesDown.setText(formatBytes(bytesDownVal));
-                        bytesUp.setText(formatBytes(bytesUpVal));
+                        bytesDown.setText(formatBytes(bytesUpVal));
+                        bytesUp.setText(formatBytes(bytesDownVal));
                         statusUptime.setText("在线:" + formatUptime(uptime));
                         logAdapter.refreshAll(activeConnections);
                     });

@@ -15,6 +15,7 @@ public class ConnectionRecord {
     public final AtomicLong bytesDown = new AtomicLong(0);
     public final AtomicLong bytesUp = new AtomicLong(0);
     public volatile boolean active = true;
+    public volatile boolean failed = false;
 
     public ConnectionRecord(String clientIp, String targetHost, int targetPort, long startTime) {
         this.clientIp = clientIp;
