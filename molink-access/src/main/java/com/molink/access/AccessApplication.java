@@ -2,7 +2,7 @@ package com.molink.access;
 
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.MolinkProperties;
-import com.molink.access.forwarder.PortForwarder;
+import com.molink.access.forwarder.AdbForwarder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -29,13 +29,13 @@ public class AccessApplication {
     }
 
     @Bean
-    public PortForwarder portForwarder(MolinkProperties props, AdbClientManager adbClient) {
-        return new PortForwarder(adbClient, props.getLocalPort(), props.getRemotePort());
+    public AdbForwarder adbForwarder(MolinkProperties props, AdbClientManager adbClient) {
+        return new AdbForwarder(adbClient, props.getLocalPort(), props.getRemotePort());
     }
 
     @Bean
     public CommandLineRunner runner(MolinkProperties props, AdbClientManager adbClient,
-            PortForwarder portForwarder) {
+            AdbForwarder adbForwarder) {
         return args -> {
             log.info("=== MoLink Access Starting ===");
             log.info("Local proxy port: {}", props.getLocalPort());
@@ -45,15 +45,15 @@ public class AccessApplication {
             // Set up callbacks first (avoid race where background thread connects before callback is registered)
             adbClient.setOnConnected(dadb -> {
                 try {
-                    portForwarder.start();
-                    log.info("Port forward ready, proxy available -> localhost:{}", props.getLocalPort());
+                    adbForwarder.start();
+                    log.info("AdbForwarder ready, proxy available -> localhost:{}", props.getLocalPort());
                 } catch (Exception e) {
-                    log.error("Port forward start failed: {}", e.getMessage(), e);
+                    log.error("AdbForwarder start failed: {}", e.getMessage(), e);
                 }
             });
 
             adbClient.setOnDisconnected(() -> {
-                portForwarder.stop();
+                adbForwarder.stop();
                 log.warn("Device disconnected, waiting for reconnect...");
             });
 
@@ -64,13 +64,13 @@ public class AccessApplication {
             log.info("Waiting for Android device...");
             adbClient.waitForConnection();
 
-            // Device is now connected; manually trigger onConnected to ensure port forward is started
+            // Device is now connected; manually trigger onConnected to ensure AdbForwarder is started
             if (adbClient.isConnected()) {
                 try {
-                    portForwarder.start();
-                    log.info("Port forward ready, proxy available -> localhost:{}", props.getLocalPort());
+                    adbForwarder.start();
+                    log.info("AdbForwarder ready, proxy available -> localhost:{}", props.getLocalPort());
                 } catch (Exception e) {
-                    log.error("Port forward start failed: {}", e.getMessage(), e);
+                    log.error("AdbForwarder start failed: {}", e.getMessage(), e);
                 }
             }
 
