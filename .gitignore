@@ -20,3 +20,4 @@ molink-worker\app\build\
 logs
 __pycache__
 .gradle
+.claude
