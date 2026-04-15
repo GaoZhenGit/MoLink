@@ -49,10 +49,10 @@ public final class ForwardHandler extends ChannelInboundHandlerAdapter {
         // 更新 ConnectionRecord 字节计数
         if ("c->s".equals(direction)) {
             record.addBytesDown(len);
-            Socks5ProxyService.addBytesDown(len);   // 全局统计（问题1修复）
+            Socks5ProxyService.addBytesUp(len);
         } else {
             record.addBytesUp(len);
-            Socks5ProxyService.addBytesUp(len);    // 全局统计（问题1修复）
+            Socks5ProxyService.addBytesDown(len);
         }
 
         // 将数据写入对端，写入失败立即触发双向关闭（问题3修复）
