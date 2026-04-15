@@ -7,7 +7,7 @@
 **v3 新增需求（用户反馈）：**
 - **v3 Req 1（核心）**：UI 每 0.5 秒自动全量刷新 record list，list 为 final 类型，连接逻辑只改 list
 - **v3 Req 2（核心）**：两个方向的线程和 Socket 必须同步销毁，任一方向中断时，另一方向强制中断
-- **v3 Req 3（确认）**：中断判定条件 = EOF 或异常或 15 秒无数据；使用 `setSoTimeout(15000)` 实现，无需额外定时器
+- **v3 Req 3（确认）**：中断判定条件 = EOF 或 IOException 或 55 秒无数据；使用 `setSoTimeout(55000)` 实现；FIN 延迟到达时 55 秒兜底检测
 - **v3 Req 4（确认）**：record 状态简化为"进行中/已结束"，对应绿色/灰色；去除红色状态；数据结构从 active+failed boolean 改为 state enum
 
 **v2 遗留修复：**
@@ -19,7 +19,14 @@
 
 **Goal:** 修复 molink-worker 的 Socks5ProxyService，当客户端主动断开（Ctrl-C）时，立即关闭与目标服务器的连接，节省流量并释放资源。
 
-**Architecture:** 引入 `Pipe` 内部类封装双向转发的 Socket 对，实现级联关闭——任一方向检测到 EOF、异常或 15 秒无数据时，立即关闭对端 Socket 以中断另一个线程的阻塞 read()，并同步关闭本端 Socket。使用 AtomicBoolean 确保 Socket 只关闭一次避免竞态。record 使用 state enum 管理"进行中/已结束"状态，UI 每 0.5 秒全量刷新。
+**Architecture:** 三层完全解耦：
+- **数据层**：`activeConnections` 为 `final List<ConnectionRecord> = Collections.synchronizedList(new ArrayList<>())`，两层共享同一引用，无复制开销
+  - 单次 `add()` / `remove()`：内置 synchronized，无需额外加锁
+  - check-then-act 复合操作（addConnectionRecord 中的 while+remove+add）：需 synchronized 包裹
+  - `refreshAll()` 迭代：需 synchronized 块包裹
+- **连接层（Socks5ProxyService）**：仅通过 `addConnectionRecord()` / `removeConnectionRecord()` 操作 list，不调用任何 UI 方法
+- **Record 层（ConnectionRecord）**：通过 `ConnectionState enum` 管理状态，forward 线程更新 record 字段
+- **UI 层（MainActivity + ConnectionLogAdapter）**：每 0.5 秒调用 `getConnectionSnapshot()` 读取同一份 list，refreshAll() 内部构建自己的 list，完全解耦
 
 **Tech Stack:** Android Java (API 27+), SOCKS5 协议, Java Socket API
 
@@ -28,10 +35,16 @@
 ## File Structure
 
 - **Modify:** `D:\project\MoLink\molink-worker\app\src\main\java\com\molink\worker\Socks5ProxyService.java`
-  - 第 263-412 行：handleClient() 方法
-  - 第 478-510 行：forward() 方法
+  - 第 29 行附近：移除 `CopyOnWriteArrayList`，添加 `Collections`
+  - 第 38 行附近：类字段区域（添加 MAX_HISTORY = 50）
+  - 第 64 行：activeConnections 改为 `final List<ConnectionRecord> = Collections.synchronizedList(new ArrayList<>())`
+  - 第 163 行附近：getConnectionCount() 改为 return activeConnections.size()
+  - 第 256 行：移除该处 notifyStatusUpdate() 调用
+  - 第 263-412 行：handleClient() 方法（仅操作 list，不调用任何 UI 方法）
+  - 第 378-398 行：handleClient() 中的 list 操作改为 addRecord/removeRecord
+  - 第 478-510 行：forward() 方法（仅更新 record 字段，不调用任何 UI 方法）
+  - 第 82-92 行：notifyStatusUpdate() 方法（标记为 deprecated 或删除）
   - 第 167 行附近：closeQuietly() 辅助方法位置
-  - 第 38 行附近：类字段区域（ConnectionRecord 创建 + activeConnections）
   - onCreate()/onDestroy()：线程池生命周期管理（可选）
 - **Modify:** `D:\project\MoLink\molink-worker\app\src\main\java\com\molink\worker\ConnectionRecord.java`
   - 新增 ConnectionState enum，替换 active + failed boolean
@@ -193,10 +206,12 @@ private void forward(Pipe pipe) {
 ```
 
 > **中断判定逻辑（v3 Req 3）：**
-> `setSoTimeout(15000)` 在 Socket 上设置后，以下任一条件触发即认为该方向中断：
+> `setSoTimeout(55000)` 在 Socket 上设置后，以下任一条件触发即认为该方向中断：
 > - `in.read()` 返回 -1（EOF，正常关闭）
-> - `in.read()` 抛出 `SocketTimeoutException`（15 秒无数据，异常关闭）
-> - `in.read()` 抛出其他 `IOException`（连接异常）
+> - `in.read()` 抛出 `IOException`（连接异常）
+> - `in.read()` 抛出 `SocketTimeoutException`（55 秒无数据，兜底检测对端存活）
+>
+> **为何用 55 秒**：curl Ctrl-C 后 FIN 可能被 adb forward 隧道延迟，pipe1.read() 收不到 FIN 会一直阻塞，server 继续发送数据直到完成。55 秒覆盖大多数 HTTP Keep-Alive 场景。
 >
 > 任一方向中断 → `closePeer()` 关闭对端 → 对端 read() 也会抛异常 → 双向同步关闭。
 
@@ -227,10 +242,18 @@ t2.join();
 
 修改后：
 ```java
-// 创建管道对象
+// v3 Req 2: handleClient() 仅操作 record list，不调用任何 UI 方法
+
+// 第378行附近：连接建立后，添加到 list（超出 MAX_HISTORY 时从队首删除旧记录）
+historyCount.incrementAndGet();  // 历史计数，不变
+String clientIp = clientSocket.getRemoteSocketAddress().toString();
+if (clientIp.startsWith("/")) clientIp = clientIp.substring(1);
+final ConnectionRecord record = new ConnectionRecord(clientIp, destAddr, destPort, System.currentTimeMillis());
+addConnectionRecord(record);  // ← 新增，超过 MAX_HISTORY 时 FIFO 删除旧记录
+
+// 双向转发（Pipe 逻辑不变，同 Task 1-2）
 Pipe pipe1 = new Pipe(clientSocket, targetSocket, "c->s", record);
 Pipe pipe2 = new Pipe(targetSocket, clientSocket, "s->c", record);
-
 Thread t1 = new Thread(() -> forward(pipe1), "Forward-c->s");
 Thread t2 = new Thread(() -> forward(pipe2), "Forward-s->c");
 t1.start();
@@ -240,7 +263,7 @@ t2.start();
 t1.join(60_000);
 t2.join(60_000);
 
-// v3 Req 2: 如果超时后仍存活，强制中断并销毁 Socket
+// v3 Req 2: 超时强制中断时，closeAll() 关闭连接（不涉及 UI）
 if (t1.isAlive() || t2.isAlive()) {
     Log.w(TAG, "Forward threads still alive after 60s, forcing shutdown");
     t1.interrupt();
@@ -249,17 +272,14 @@ if (t1.isAlive() || t2.isAlive()) {
     pipe2.closeAll();
 }
 
-// === UI 状态判断（v3 Req 4）：任一方向结束即灰色 ===
-// 不再区分正常/异常，只要任一方向中断即为已结束
-boolean pipe1Ended = pipe1.isEnded();
-boolean pipe2Ended = pipe2.isEnded();
-if (pipe1Ended && pipe2Ended) {
-    // 两个方向都结束了，record 状态在 checkEnded() 中已更新
-    Log.d(TAG, "Connection ended (gray dot)");
-} else {
-    // 理论上 join() 已等待完毕，不会走到这里，记录以防万一
-    Log.w(TAG, "Connection join() returned but threads not both ended: c->s=" + pipe1Ended + " s->c=" + pipe2Ended);
-}
+// === 记录结束状态（v3 Req 4）===
+pipe1.isEnded();   // 触发 Pipe1 的 ended 状态读取
+pipe2.isEnded();   // 触发 Pipe2 的 ended 状态读取
+record.setEnded(); // 两个方向都结束了，标记 record 为已结束
+
+// 第396行附近：连接关闭后，从 list 移除（不再调用 notifyStatusUpdate）
+removeConnectionRecord(record);  // ← 新增
+Log.i(TAG, "Client session closed");
 ```
 
 - [ ] **Step 2: 验证编译**
@@ -293,16 +313,14 @@ Expected: BUILD SUCCESSFUL
 } catch (Exception e) {
     Log.e(TAG, "handleClient error: " + e.getMessage(), e);
 
-    // v3 Req 2: 确保所有 Socket 都被关闭
+    // v3 Req 2: 仅关闭 Socket，不调用任何 UI 方法
     closeQuietly(targetSocket);
     closeQuietly(clientSocket);
 
-    // 更新统计（v3 Req 4：如果 record 已创建，标记为已结束）
+    // v3 Req 4: 如果 record 已创建，标记为已结束并从 list 移除
     if (record != null) {
-        record.setEnded();  // 替代 active=false + failed=true
-        activeConnections.remove(record);
-        connectionCount.decrementAndGet();
-        notifyStatusUpdate();
+        record.setEnded();
+        removeConnectionRecord(record);  // ← 替代 notifyStatusUpdate()
     }
 }
 ```
@@ -373,8 +391,8 @@ try {
         new InetSocketAddress(destAddr, destPort),
         10_000  // 连接超时 10 秒
     );
-    // v3 Req 3: 15 秒无数据即认为中断（触发 SocketTimeoutException）
-    targetSocket.setSoTimeout(15_000);
+    // v3 Req 3: 55 秒无数据即认为中断（触发 SocketTimeoutException）
+    targetSocket.setSoTimeout(55_000);
     targetSocket.setKeepAlive(true);
     targetSocket.setTcpNoDelay(true);
 } catch (IOException e) {
@@ -395,9 +413,13 @@ try {
 
 在 handleClient() 方法开始处（约第264行），try 块之后添加：
 ```java
-// v3 Req 3: 客户端 15 秒无数据即中断
-clientSocket.setSoTimeout(15_000);
-clientSocket.setKeepAlive(true);
+// v3 Req 3: 55 秒无数据即中断，兜底检测客户端存活
+try {
+    clientSocket.setSoTimeout(55_000);
+    clientSocket.setKeepAlive(true);
+} catch (SocketException e) {
+    Log.w(TAG, "Failed to set client socket options: " + e.getMessage());
+}
 ```
 
 - [ ] **Step 3: 验证编译**
@@ -492,7 +514,95 @@ Expected: BUILD SUCCESSFUL
 
 ---
 
-## Task 8 (P0): 重构 ConnectionRecord 状态（v3 Req 4）
+## Task 8 (P0): 记录列表管理 + 控制层完全解耦（v3 Req 1 & Req 2）
+
+**Files:**
+- Modify: `D:\project\MoLink\molink-worker\app\src\main\java\com\molink\worker\Socks5ProxyService.java`
+
+**设计原则（v3 Req 2）：连接处理逻辑仅操作 record list，不调用任何 UI 方法。UI 通过定时轮询 getConnectionSnapshot() 获取数据，完全解耦。**
+
+- [ ] **Step 1: 添加 MAX_HISTORY 常量，与 ConnectionLogAdapter.MAX_ITEMS 保持一致（第38行附近）**
+
+```java
+// v3 Req 1: 历史记录上限，超出时 FIFO 删除最旧记录
+private static final int MAX_HISTORY = 50;
+```
+
+- [ ] **Step 2: 将 activeConnections 改为 final**
+
+```java
+// v3 Req 1: final synchronized list，两层共享同一引用，无复制开销
+// 写操作（add/remove）由 synchronized 保护；读操作（refreshAll 迭代）需在 synchronized 块中执行
+private final List<ConnectionRecord> activeConnections = Collections.synchronizedList(new ArrayList<>());
+```
+
+- [ ] **Step 3: 添加 addConnectionRecord() 方法（记录上限 FIFO 管理）**
+
+在 activeConnections 字段下方添加：
+
+```java
+/**
+ * 添加连接记录，超出 MAX_HISTORY 时从队首删除最旧记录（v3 Req 1）
+ * synchronizedList 单次 add/remove 内部已加锁，无需额外同步
+ * 但 check-then-act 复合操作（while + remove + add）需要 synchronized 包裹
+ */
+private void addConnectionRecord(ConnectionRecord record) {
+    synchronized (activeConnections) {
+        while (activeConnections.size() >= MAX_HISTORY) {
+            activeConnections.remove(0);  // 删除最旧记录（FIFO）
+        }
+        activeConnections.add(record);
+    }
+}
+
+/**
+ * 移除连接记录（v3 Req 1）
+ * synchronizedList 单次 remove 内部已加锁，无需额外同步
+ */
+private void removeConnectionRecord(ConnectionRecord record) {
+    activeConnections.remove(record);
+}
+```
+
+- [ ] **Step 4: 修改 getConnectionCount()，直接返回 list size**
+
+约第163行，修改 `getConnectionCount()` 方法：
+
+```java
+// v3 Req 2: 无需维护 connectionCount 字段，直接从 list 计算
+public int getConnectionCount() {
+    return activeConnections.size();
+}
+```
+
+- [ ] **Step 5: 添加 getConnectionSnapshot() 方法（供 UI 轮询）**
+
+在 getConnectionCount() 附近添加：
+
+```java
+// v3 Req 1: 返回 shared reference，无需复制
+// CopyOnWriteArrayList 本身线程安全，refreshAll() 内部会构建自己的 list
+public static List<ConnectionRecord> getConnectionSnapshot() {
+    return activeConnections;
+}
+```
+
+- [ ] **Step 6: 移除所有 notifyStatusUpdate() 调用（共2处）**
+
+使用 Grep 找到以下位置，逐一移除：
+- `handleClient()` 第398行：移除 `notifyStatusUpdate()` 调用（已被 Step 3/Task 4 替换）
+- SOCKS5 服务启动处约第256行：移除该处 `notifyStatusUpdate()` 调用
+
+notifyStatusUpdate() 方法本身可以保留（不影响功能，若确认无其他调用方可删除）。
+
+- [ ] **Step 7: 验证编译**
+
+Run: `cd molink-worker && ./gradlew assembleDebug 2>&1 | tail -20`
+Expected: BUILD SUCCESSFUL
+
+---
+
+## Task 9 (P0): 重构 ConnectionRecord 状态（v3 Req 4）
 
 **Files:**
 - Modify: `D:\project\MoLink\molink-worker\app\src\main\java\com\molink\worker\ConnectionRecord.java`
@@ -549,7 +659,7 @@ Expected: BUILD SUCCESSFUL
 
 ---
 
-## Task 9 (P0): 更新 ConnectionLogAdapter UI 颜色（v3 Req 4）
+## Task 10 (P0): 更新 ConnectionLogAdapter UI 颜色（v3 Req 4）
 
 **Files:**
 - Modify: `D:\project\MoLink\molink-worker\app\src\main\java\com\molink\worker\ConnectionLogAdapter.java:98-104`
@@ -576,7 +686,32 @@ if (record.isEnded()) {
 }
 ```
 
-- [ ] **Step 2: 创建 circle_gray.xml drawable（如果没有）**
+- [ ] **Step 2: 修改 refreshAll() 迭代逻辑（使用 synchronized 块）**
+
+在 `refreshAll()` 方法中，迭代 shared synchronized list 时需要 synchronized 块：
+
+```java
+public void refreshAll(List<ConnectionRecord> newItems) {
+    items.clear();
+    List<ConnectionRecord> filtered = new ArrayList<>();
+    // v3 Req 1: synchronizedList 迭代需在 synchronized 块中，防止并发修改
+    synchronized (newItems) {
+        for (ConnectionRecord r : newItems) {
+            if (r == null) continue;
+            String host = r.targetHost;
+            if (host == null) continue;
+            boolean isLocalhost = host.startsWith("127.") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1");
+            boolean isStatusPort = r.targetPort == BuildConfig.STATUS_HTTP_PORT;
+            if (!isLocalhost && !isStatusPort) {
+                filtered.add(r);
+            }
+        }
+    }
+    // 后续逻辑不变：反转 + 取前 MAX_ITEMS 条 ...
+}
+```
+
+- [ ] **Step 3: 创建 circle_gray.xml drawable（如果没有）**
 
 在 `res/drawable/` 中创建 `circle_gray.xml`：
 ```xml
@@ -588,69 +723,82 @@ if (record.isEnded()) {
 </shape>
 ```
 
-- [ ] **Step 3: 验证编译**
+- [ ] **Step 4: 验证编译**
 
 Run: `cd molink-worker && ./gradlew assembleDebug 2>&1 | tail -20`
 Expected: BUILD SUCCESSFUL
 
 ---
 
-## Task 10 (P0): UI 每 0.5 秒自动全量刷新（v3 Req 1）
+## Task 11 (P0): UI 每 0.5 秒自动全量刷新（v3 Req 1）
 
 **Files:**
 - Modify: `D:\project\MoLink\molink-worker\app\src\main\java\com\molink\worker\MainActivity.java`
 
-**背景：** 当前 UI 依赖 `notifyStatusUpdate()` 主动刷新，耦合紧。改为 UI 定时读取 final list，实现完全解耦。
+**目标：** 移除 StatusListener 主动回调，用 0.5 秒定时轮询 getConnectionSnapshot() 替代，实现 UI 与控制层完全解耦。getConnectionSnapshot() 在 Task 8 中已添加（返回 shared reference，无复制）。**
 
-- [ ] **Step 1: 在 MainActivity 中查找现有的 UI 刷新逻辑**
+- [ ] **Step 1: 读取 MainActivity 现有 uiPoller 和 StatusListener 代码**
 
-找到 `Handler` 或 `Runnable` 相关的刷新代码。
+确认现有的 `uiHandler` 和 `uiPoller`（每 2 秒）的具体实现位置，以及 StatusListener 的注册/注销位置。
 
-- [ ] **Step 2: 添加 0.5 秒定时刷新 Handler**
+- [ ] **Step 2: 简化 uiPoller 为 0.5 秒轮询**
+
+修改现有的 `uiPoller`，改为每 0.5 秒读取快照并刷新全部 UI：
 
 ```java
-// v3 Req 1: UI 每 0.5 秒自动全量刷新，数据源为 final list
+// v3 Req 1: 0.5 秒全量轮询，完全替代 StatusListener 回调
 private static final long UI_REFRESH_INTERVAL_MS = 500;
 
-private final Handler uiRefreshHandler = new Handler(Looper.getMainLooper());
-private final Runnable uiRefreshRunnable = new Runnable() {
+private final Runnable uiPoller = new Runnable() {
     @Override
     public void run() {
-        adapter.refreshAll(Socks5ProxyService.getConnectionSnapshot());
-        uiRefreshHandler.postDelayed(this, UI_REFRESH_INTERVAL_MS);
+        if (!isFinishing()) {
+            Socks5ProxyService svc = Socks5ProxyService.getInstance();
+            if (svc != null && svc.isRunning()) {
+                // 读取 shared list，refreshAll() 内部构建自己的 list
+                List<ConnectionRecord> snapshot = Socks5ProxyService.getConnectionSnapshot();
+                connCount.setText(String.valueOf(snapshot.size()));  // 活动连接数
+                historyCount.setText(String.valueOf(svc.getHistoryCount()));  // 历史总数
+                bytesDown.setText(formatBytes(svc.getTotalBytesDown()));
+                bytesUp.setText(formatBytes(svc.getTotalBytesUp()));
+                statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
+                logAdapter.refreshAll(snapshot);  // 全量刷新（snapshot 内部构建自己的 list）
+            }
+            uiHandler.postDelayed(this, UI_REFRESH_INTERVAL_MS);
+        }
     }
 };
-
-// 在 onResume() 中启动：
-@Override
-protected void onResume() {
-    super.onResume();
-    uiRefreshHandler.post(uiRefreshRunnable);  // 立即刷新一次，然后每 0.5s
-}
-
-// 在 onPause() 中停止（节省资源）：
-@Override
-protected void onPause() {
-    super.onPause();
-    uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
-}
 ```
 
-- [ ] **Step 3: 在 Socks5ProxyService 中添加快照方法**
+- [ ] **Step 3: 移除 StatusListener 机制**
 
-在 `Socks5ProxyService.java` 类字段区域添加：
+在 MainActivity 中：
+1. 删除 `statusListener` 字段（整个匿名类）
+2. 从 `onCreate()`/`onResume()`/`onPause()`/`onToggleClick()` 中移除所有 `addStatusListener()` 和 `removeStatusListener()` 调用
+
 ```java
-// v3 Req 1: 提供只读快照供 UI 定时读取，调用方获得瞬时副本，不持有锁
-public static List<ConnectionRecord> getConnectionSnapshot() {
-    return new ArrayList<>(activeConnections);
-}
+// onCreate 中：删除以下代码
+// svc.addStatusListener(statusListener);
+
+// onResume 中：删除以下代码
+// svc.addStatusListener(statusListener);
+
+// onPause 中：删除以下代码
+// svc.removeStatusListener(statusListener);
+
+// onToggleClick 中：删除以下代码
+// svc.removeStatusListener(statusListener);
 ```
 
-- [ ] **Step 4: 移除 Socks5ProxyService 中的 notifyStatusUpdate() 调用（不再需要主动通知）**
+- [ ] **Step 4: 添加 totalBytesDown/totalBytesUp 访问方法**
 
-搜索 `notifyStatusUpdate()` 的所有调用位置，从 `handleClient()` 和连接管理代码中移除。Service 的 notifyStatusUpdate() 方法本身可保留（如果其他模块还在用），否则删除。
+在 Socks5ProxyService 中（若不存在）添加：
 
-**注意：** 此改动涉及多处搜索，建议用 Grep 工具确认所有调用位置后再修改。
+```java
+public long getTotalBytesDown() { return totalBytesDown.get(); }
+public long getTotalBytesUp() { return totalBytesUp.get(); }
+public int getHistoryCount() { return historyCount.get(); }
+```
 
 - [ ] **Step 5: 验证编译**
 
@@ -711,7 +859,7 @@ adb shell ps -T | grep molink-worker | wc -l
 - **修改文件数：** 4 个（Socks5ProxyService.java、ConnectionRecord.java、ConnectionLogAdapter.java、MainActivity.java）
 - **新增代码：** 约 50 行（Pipe 类 + 辅助方法 + 线程池）
 - **修改代码：** 约 60 行（forward + handleClient + ConnectionRecord + UI）
-- **Task 数：** 10 个（Task 1-6 + 8-10 为必须 P0；Task 7 为可选 P1）
+- **Task 数：** 11 个（Task 1-6 + 8-11 为必须 P0；Task 7 为可选 P1）
 - **v3 修订：** Task 1 closePeer() 新增 shutdownInput+shutdownOutput；Task 2 finally 块说明更新；Task 5 closeQuietly() 三步关闭；Task 8-10 新增
 
 ---
@@ -720,10 +868,10 @@ adb shell ps -T | grep molink-worker | wc -l
 
 | 场景 | 修改前 | 修改后 |
 |------|--------|--------|
-| 客户端 Ctrl-C | targetSocket 保持打开 60+ 秒 | targetSocket < 1 秒关闭，fd 无泄漏，双向同步 |
+| 客户端 Ctrl-C | targetSocket 保持打开 60+ 秒 | <1 秒关闭，fd 无泄漏，双向同步 |
 | 异常路径 | targetSocket 泄漏 | 全部正确关闭（finally + closeAll 保证） |
 | 连接失败 | 无限等待 | 10 秒超时返回 |
-| 15 秒无数据 | 无感知 | 自动中断，双向同步关闭，UI 变灰色 |
+| 55 秒无数据（curl 崩溃/隧道断） | 无感知 | 自动中断，双向同步关闭，UI 变灰色 |
 | 高并发 | 无线程数上限 | 线程池限制（Task 7 可选） |
 | UI 刷新 | 主动通知触发 | 0.5 秒定时全量刷新，list 为 final，完全解耦 |
 | UI 状态 | 红/黄/绿三色 | 绿（进行中）/灰（已结束），无红色 |
