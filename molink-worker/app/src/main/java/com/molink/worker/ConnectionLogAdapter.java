@@ -48,16 +48,19 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
     /** 全量更新（由 Handler 定时刷新时调用）。过滤掉 localhost/dadb tunnel 流量，超量时裁剪旧记录。最新连接显示在底部。 */
     public void refreshAll(List<ConnectionRecord> newItems) {
         items.clear();
-        // activeConnections  newest-first，所以先反转：oldest-first，再取前 MAX_ITEMS
+        // activeConnections newest-first，所以先反转：oldest-first，再取前 MAX_ITEMS
         List<ConnectionRecord> filtered = new ArrayList<>();
-        for (ConnectionRecord r : newItems) {
-            if (r == null) continue;
-            String host = r.targetHost;
-            if (host == null) continue;
-            boolean isLocalhost = host.startsWith("127.") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1");
-            boolean isStatusPort = r.targetPort == BuildConfig.STATUS_HTTP_PORT;
-            if (!isLocalhost && !isStatusPort) {
-                filtered.add(r);
+        // v3 Req 1: synchronizedList 迭代需在 synchronized 块中，防止并发修改
+        synchronized (newItems) {
+            for (ConnectionRecord r : newItems) {
+                if (r == null) continue;
+                String host = r.targetHost;
+                if (host == null) continue;
+                boolean isLocalhost = host.startsWith("127.") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1");
+                boolean isStatusPort = r.targetPort == BuildConfig.STATUS_HTTP_PORT;
+                if (!isLocalhost && !isStatusPort) {
+                    filtered.add(r);
+                }
             }
         }
         // 反转： newest-first → oldest-first
@@ -95,12 +98,10 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
             long secs = record.getDurationSec();
             duration.setText(formatDuration(secs));
 
-            if (record.failed) {
-                dot.setBackgroundResource(R.drawable.circle_red);
-            } else if (record.active) {
-                dot.setBackgroundResource(R.drawable.circle_yellow);
+            if (record.isEnded()) {
+                dot.setBackgroundResource(R.drawable.circle_gray);  // 已结束：灰色
             } else {
-                dot.setBackgroundResource(R.drawable.circle_green);
+                dot.setBackgroundResource(R.drawable.circle_green);  // 进行中：绿色
             }
         }
 

@@ -27,33 +27,29 @@ public class MainActivity extends Activity {
     private Button toggleButton;
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+
+    // v3 Req 1: 0.5 秒全量轮询，完全替代 StatusListener 回调
+    private static final long UI_REFRESH_INTERVAL_MS = 500;
+
     private final Runnable uiPoller = new Runnable() {
         @Override
         public void run() {
             if (!isFinishing()) {
-                updateUI(Socks5ProxyService.getInstance());
-                uiHandler.postDelayed(this, 2000);
+                Socks5ProxyService svc = Socks5ProxyService.getInstance();
+                if (svc != null && svc.isRunning()) {
+                    // v3 Req 1: 读取 shared list，refreshAll() 内部构建自己的 list
+                    List<ConnectionRecord> snapshot = Socks5ProxyService.getConnectionSnapshot();
+                    connCount.setText(String.valueOf(snapshot.size()));  // 活动连接数
+                    historyCount.setText(String.valueOf(svc.getHistoryCount()));  // 历史总数
+                    bytesDown.setText(formatBytes(svc.getTotalBytesDown()));
+                    bytesUp.setText(formatBytes(svc.getTotalBytesUp()));
+                    statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
+                    logAdapter.refreshAll(snapshot);  // 全量刷新
+                }
+                uiHandler.postDelayed(this, UI_REFRESH_INTERVAL_MS);
             }
         }
     };
-
-    // StatusListener：通过静态实例注册，服务销毁后自动失效
-    private final Socks5ProxyService.StatusListener statusListener =
-            new Socks5ProxyService.StatusListener() {
-                @Override
-                public void onStatusUpdate(long uptime, int connectionCountVal, int historyCountVal,
-                                           long bytesDownVal, long bytesUpVal,
-                                           List<ConnectionRecord> activeConnections) {
-                    runOnUiThread(() -> {
-                        connCount.setText(String.valueOf(connectionCountVal));
-                        historyCount.setText(String.valueOf(historyCountVal));
-                        bytesDown.setText(formatBytes(bytesUpVal));
-                        bytesUp.setText(formatBytes(bytesDownVal));
-                        statusUptime.setText("在线:" + formatUptime(uptime));
-                        logAdapter.refreshAll(activeConnections);
-                    });
-                }
-            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,10 +75,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // 注册 StatusListener（如果服务正在运行）
-        Socks5ProxyService svc = Socks5ProxyService.getInstance();
-        if (svc != null) svc.addStatusListener(statusListener);
-
         uiHandler.removeCallbacks(uiPoller);
         uiHandler.postDelayed(uiPoller, 300);
     }
@@ -91,8 +83,6 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         uiHandler.removeCallbacks(uiPoller);
-        Socks5ProxyService svc = Socks5ProxyService.getInstance();
-        if (svc != null) svc.removeStatusListener(statusListener);
     }
 
     /** 显式启动 / 显式停止 */
@@ -100,20 +90,14 @@ public class MainActivity extends Activity {
         Socks5ProxyService svc = Socks5ProxyService.getInstance();
         if (svc != null && svc.isRunning()) {
             // ===== 显式停止 =====
-            svc.removeStatusListener(statusListener);
             stopService(new Intent(this, Socks5ProxyService.class));
             // 立即刷新 UI
             showStopped();
         } else {
             // ===== 显式启动 =====
             startService(new Intent(this, Socks5ProxyService.class));
-            // 服务启动需要短暂时间，乐观更新 UI
+            // 乐观更新 UI
             showRunning(null);
-            // 500ms 后注册 StatusListener（此时服务通常已 onCreate）
-            uiHandler.postDelayed(() -> {
-                Socks5ProxyService started = Socks5ProxyService.getInstance();
-                if (started != null) started.addStatusListener(statusListener);
-            }, 500);
         }
         // 重新触发轮询，确保状态最终一致
         uiHandler.removeCallbacks(uiPoller);
@@ -125,8 +109,6 @@ public class MainActivity extends Activity {
             showStopped();
         } else {
             showRunning(svc);
-            // 确保 StatusListener 已注册
-            svc.addStatusListener(statusListener);
         }
     }
 
