@@ -230,7 +230,7 @@ def stop_access_service() -> None:
     r = run_cmd(["jps", "-l"], timeout=5, print_output=True)
     print(r.stdout)
     for line in r.stdout.splitlines():
-        if "com.molink.access.AccessApplication" in line:
+        if "molink-access" in line:
             parts = line.strip().split()
             if len(parts) >= 1:
                 pid = parts[0]
