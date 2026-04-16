@@ -16,6 +16,12 @@
 
 ---
 
+## ⚠️ 限制：禁止提交 git
+
+本计划执行过程中**禁止执行任何 git 提交命令**（`git commit`、`git add` 等），所有代码变更仅保留在工作目录中，待用户确认后再统一处理。
+
+---
+
 ## Task 1: 添加信号处理器
 
 - **修改**: `test/test.py`
@@ -77,11 +83,7 @@ def main() -> None:
     _cleanup_data["logcat_proc"] = logcat_proc
 ```
 
-- [ ] **Step 3: 提交**
-```bash
-git add test/test.py
-git commit -m "feat(test): add SIGINT/SIGTERM handler to cleanup on Ctrl-C"
-```
+（Task 1 无 commit 步骤，禁止 git 提交）
 
 ---
 
@@ -224,11 +226,7 @@ def stop_logcat(proc: subprocess.Popen) -> None:
 
 - [ ] **Step 4: 更新 `cleanup_logs()` 中 `shutil.rmtree(LOGS_DIR)` — 由于 `stop_logcat` 已保证文件句柄释放，直接删除目录即可，无需额外处理**
 
-- [ ] **Step 5: 提交**
-```bash
-git add test/test.py
-git commit -m "feat(test): refactor logcat into LogcatCollector with PID polling"
-```
+（Task 2 无 commit 步骤，禁止 git 提交）
 
 ---
 
@@ -311,11 +309,7 @@ if not start_worker_service_with_retry(device):
     summary_and_exit(device, results, start_time, 1)
 ```
 
-- [ ] **Step 3: 提交**
-```bash
-git add test/test.py
-git commit -m "feat(test): add worker service retry + dumpsys verification"
-```
+（Task 3 无 commit 步骤，禁止 git 提交）
 
 ---
 
@@ -362,11 +356,7 @@ git commit -m "feat(test): add worker service retry + dumpsys verification"
 
 同样处理步骤 5。
 
-- [ ] **Step 4: 提交**
-```bash
-git add test/test.py
-git commit -m "feat(test): add --no-build CLI argument to skip build steps"
-```
+（Task 4 无 commit 步骤，禁止 git 提交）
 
 ---
 
@@ -384,16 +374,7 @@ git commit -m "feat(test): add --no-build CLI argument to skip build steps"
 
 预期输出包含 `--no-build` 选项说明。
 
-- [ ] **Step 3: 提交最终变更**
-```bash
-git add test/test.py
-git commit -m "refactor(test): complete E2E script refactor
-
-- LogcatCollector: poll PID before starting filtered logcat
-- Worker service: retry 3x with dumpsys verification
-- Signal handler: cleanup on Ctrl-C
-- CLI: --no-build to skip build steps"
-```
+（Task 5 无 commit 步骤，禁止 git 提交）
 
 ---
 
