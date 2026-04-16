@@ -1,7 +1,9 @@
 """
 MoLink E2E Test Script - Cross-platform Python implementation
 """
+import argparse
 import datetime
+import signal
 import sys
 import time
 import shutil
@@ -10,6 +12,7 @@ import subprocess
 import re
 import os
 from pathlib import Path
+import threading
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -19,12 +22,12 @@ from typing import List, Optional
 
 ADB_PORT = 1080
 ADB_TIMEOUT = 10
-STOP_TIMEOUT = 30
+STOP_TIMEOUT = 15
 BUILD_TIMEOUT = 120
-INSTALL_TIMEOUT = 60
+INSTALL_TIMEOUT = 15
 SERVICE_WAIT = 10
 LOGCAT_TIMEOUT = 15
-PROXY_TIMEOUT = 30
+PROXY_TIMEOUT = 15
 
 # SOCKS5 认证测试凭证（需与 molink-worker/app/build.gradle 中 BuildConfig 保持一致）
 SOCKS_AUTH_USER = "admin"
@@ -260,6 +263,91 @@ def verify_worker_stopped(device: str) -> bool:
     return True
 
 
+MAX_SERVICE_RETRIES = 3
+SERVICE_RETRY_INTERVALS = [5, 10, 15]  # seconds between retries
+
+def is_service_running(device: str) -> bool:
+    """Return True if Socks5ProxyService is running on device."""
+    r = run_cmd(
+        [
+            "adb", "-s", device, "shell", "dumpsys",
+            "activity", "services",
+            "com.molink.worker/.Socks5ProxyService"
+        ],
+        timeout=10,
+    )
+    if r.returncode != 0:
+        return False
+    return "Socks5ProxyService" in r.stdout
+
+
+MAX_ACTIVITY_RETRIES = 3
+ACTIVITY_RETRY_INTERVALS = [5, 10, 15]
+
+
+def is_activity_running(device: str) -> bool:
+    """Return True if MainActivity is in foreground on device."""
+    r = run_cmd(
+        [
+            "adb", "-s", device, "shell", "dumpsys",
+            "activity", "activities"
+        ],
+        timeout=10,
+    )
+    if r.returncode != 0:
+        return False
+    for line in r.stdout.splitlines():
+        if "mResumedActivity" in line and "MainActivity" in line:
+            return True
+    return False
+
+
+def start_mainactivity_with_retry(device: str) -> bool:
+    """Launch MainActivity with up to 3 retries and foreground verification."""
+    for attempt in range(1, MAX_ACTIVITY_RETRIES + 1):
+        info(f"Launching MainActivity (attempt {attempt}/{MAX_ACTIVITY_RETRIES})...")
+        r = run_cmd(
+            [
+                "adb", "-s", device, "shell", "am", "start",
+                "-n", "com.molink.worker/.MainActivity"
+            ],
+            timeout=10,
+            print_output=True,
+        )
+        print(r.stdout)
+        time.sleep(2)
+        if is_activity_running(device):
+            return True
+        if attempt < MAX_ACTIVITY_RETRIES:
+            wait = ACTIVITY_RETRY_INTERVALS[attempt - 1]
+            info(f"MainActivity not running, waiting {wait}s before retry...")
+            time.sleep(wait)
+    return False
+
+
+def start_worker_service_with_retry(device: str) -> bool:
+    """Start Socks5ProxyService with up to 3 retries and dumpsys verification."""
+    for attempt in range(1, MAX_SERVICE_RETRIES + 1):
+        info(f"Starting worker service (attempt {attempt}/{MAX_SERVICE_RETRIES})...")
+        r = run_cmd(
+            [
+                "adb", "-s", device, "shell", "am", "startservice",
+                "-n", "com.molink.worker/.Socks5ProxyService"
+            ],
+            timeout=15,
+            print_output=True,
+        )
+        print(r.stdout)
+        time.sleep(2)
+        if is_service_running(device):
+            return True
+        if attempt < MAX_SERVICE_RETRIES:
+            wait = SERVICE_RETRY_INTERVALS[attempt - 1]
+            info(f"Service not running, waiting {wait}s before retry...")
+            time.sleep(wait)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
@@ -286,40 +374,118 @@ def build_access() -> CmdResult:
 # Logcat
 # ---------------------------------------------------------------------------
 
+_logcat_collector: Optional["LogcatCollector"] = None
+
+
+class LogcatCollector:
+    """Collect worker logs via background thread with PID polling.
+
+    1. Background thread: poll `adb shell pidof com.molink.worker` until PID found (max 60s).
+    2. PID found: run `adb logcat --pid=<pid>` (blocking), write to file.
+    3. Timeout: run `adb logcat` (all logs), write to file.
+    4. stop() terminates the active subprocess.
+    """
+
+    LOG_FILE = LOGS_DIR / "molink-worker.log"
+    POLL_INTERVAL = 1      # seconds
+    POLL_TIMEOUT = 60      # seconds
+
+    def __init__(self, device: str):
+        self.device = device
+        self._active_proc: Optional[subprocess.Popen] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    def _wait_for_worker_pid(self) -> Optional[str]:
+        """Poll worker PID via pidof (fallback to ps) until found or timeout."""
+        deadline = time.time() + self.POLL_TIMEOUT
+        while time.time() < deadline:
+            if self._stop_event.is_set():
+                return None
+            r = run_cmd(
+                ["adb", "-s", self.device, "shell", "pidof", "com.molink.worker"],
+                timeout=5,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    line = line.strip()
+                    if line.isdigit():
+                        return line
+            # Fallback: try ps if pidof unavailable or no output
+            r = run_cmd(
+                ["adb", "-s", self.device, "shell", "ps", "-A"],
+                timeout=5,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 9 and "com.molink.worker" in parts[-1]:
+                        pid = parts[0].strip()
+                        if pid.isdigit():
+                            return pid
+            time.sleep(self.POLL_INTERVAL)
+        return None
+
+    def _collector_loop(self) -> None:
+        """Background thread: poll for PID first, then start adb logcat --pid (blocking)."""
+        log_file = None
+        try:
+            run_cmd(["adb", "-s", self.device, "logcat", "-c"], timeout=10)
+            info("Polling worker PID...")
+            pid = self._wait_for_worker_pid()
+            if self._stop_event.is_set():
+                return
+            log_file = open(self.LOG_FILE, "w", encoding="utf-8")
+            if pid:
+                info(f"Worker PID: {pid}, starting filtered logcat")
+                self._active_proc = subprocess.Popen(
+                    ["adb", "-s", self.device, "logcat", f"--pid={pid}"],
+                    stdout=log_file,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                warn("Worker PID not found, starting raw logcat")
+                self._active_proc = subprocess.Popen(
+                    ["adb", "-s", self.device, "logcat"],
+                    stdout=log_file,
+                    stderr=subprocess.DEVNULL,
+                )
+        except Exception as e:
+            warn(f"LogcatCollector error: {e}")
+            if log_file and not log_file.closed:
+                log_file.close()
+
+    def start(self) -> subprocess.Popen:
+        """Start background thread and return immediately. Proc may be None until PID found."""
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._collector_loop, daemon=True)
+        self._thread.start()
+        return self._active_proc or None
+
+    def stop(self, proc: subprocess.Popen) -> None:
+        """Stop the thread and whichever subprocess is active."""
+        self._stop_event.set()
+        if self._active_proc and self._active_proc.poll() is None:
+            self._active_proc.terminate()
+            try:
+                self._active_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._active_proc.kill()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+
 def start_logcat(device: str) -> subprocess.Popen:
     """Start adb logcat as background process, filter only com.molink.worker process logs."""
-    log_file = open(LOGS_DIR / "worker.log", "w", encoding="utf-8")
-    # 查找 worker 进程 PID（pidof 精确匹配包名）
-    pid = None
-    cmd_pidof = ["adb", "-s", device, "shell", "pidof", "com.molink.worker"]
-    print(f"  $ {' '.join(cmd_pidof)}")
-    r = run_cmd(cmd_pidof, timeout=10, print_output=True)
-    for line in r.stdout.splitlines():
-        line = line.strip()
-        if line and line.isdigit():
-            pid = line
-            break
-    if pid:
-        info(f"Worker PID: {pid}")
-        cmd = ["adb", "-s", device, "logcat", "--pid=" + pid]
-        print(f"  $ {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.DEVNULL)
-    else:
-        warn("Could not find worker PID, collecting all logs")
-        cmd = ["adb", "-s", device, "logcat"]
-        print(f"  $ {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.DEVNULL)
-    return proc
+    global _logcat_collector
+    _logcat_collector = LogcatCollector(device)
+    return _logcat_collector.start()
 
 
 def stop_logcat(proc: subprocess.Popen) -> None:
     """Terminate the logcat background process."""
-    if proc and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    if _logcat_collector:
+        _logcat_collector.stop(proc)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +602,21 @@ def main() -> None:
     """Run the full E2E test workflow."""
     start_time = datetime.datetime.now()
 
+    # Signal handler for Ctrl-C cleanup
+    _cleanup_data = {"device": None, "access_proc": None, "logcat_proc": None}
+
+    def _sig_handler(signum, frame):
+        print("\n[Signal] Caught signal, cleaning up...")
+        cleanup(
+            _cleanup_data["device"] or "",
+            _cleanup_data["access_proc"],
+            _cleanup_data["logcat_proc"],
+        )
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _sig_handler)
+    signal.signal(signal.SIGTERM, _sig_handler)
+
     exit_code = 0
     results = {}  # {step_label: (status, description)}
     device = None
@@ -447,6 +628,14 @@ def main() -> None:
     print(f"{'='*50}" + " MoLink E2E Test " + "="*(16))
     print(f"Start: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("")
+
+    parser = argparse.ArgumentParser(description="MoLink E2E Test")
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="跳过 worker 和 access 构建，直接运行测试",
+    )
+    args = parser.parse_args()
 
     # --- Step 1: Detect ADB device ---
     step = "1"
@@ -492,31 +681,41 @@ def main() -> None:
     print("")
 
     # --- Step 4: Build worker ---
-    step = "4"
-    t = time.time()
-    step_start(step, "Build worker (Android)")
-    r = build_worker()
-    elapsed = int(time.time() - t)
-    if r.timed_out or r.returncode != 0 or "BUILD SUCCESSFUL" not in r.stdout:
-        step_fail(step, "Worker build failed")
-        results[step] = ("FAIL", f"Build failed ({elapsed}s)")
-        summary_and_exit(device, results, start_time, 1)
-    step_ok(step, "Worker built", elapsed)
-    results[step] = ("PASS", f"Built in {elapsed}s")
+    if args.no_build:
+        info("Skipping worker build (--no-build)")
+        results["4"] = ("SKIP", "Skipped by --no-build")
+        step_ok("4", "Worker build skipped", 0)
+    else:
+        step = "4"
+        t = time.time()
+        step_start(step, "Build worker (Android)")
+        r = build_worker()
+        elapsed = int(time.time() - t)
+        if r.timed_out or r.returncode != 0 or "BUILD SUCCESSFUL" not in r.stdout:
+            step_fail(step, "Worker build failed")
+            results[step] = ("FAIL", f"Build failed ({elapsed}s)")
+            summary_and_exit(device, results, start_time, 1)
+        step_ok(step, "Worker built", elapsed)
+        results[step] = ("PASS", f"Built in {elapsed}s")
     print("")
 
     # --- Step 5: Build access ---
-    step = "5"
-    t = time.time()
-    step_start(step, "Build access (Windows)")
-    r = build_access()
-    elapsed = int(time.time() - t)
-    if r.timed_out or r.returncode != 0 or not ACCESS_JAR.exists():
-        step_fail(step, "Access build failed")
-        results[step] = ("FAIL", f"Build failed ({elapsed}s)")
-        summary_and_exit(device, results, start_time, 1)
-    step_ok(step, "Access built", elapsed)
-    results[step] = ("PASS", f"Built in {elapsed}s")
+    if args.no_build:
+        info("Skipping access build (--no-build)")
+        results["5"] = ("SKIP", "Skipped by --no-build")
+        step_ok("5", "Access build skipped", 0)
+    else:
+        step = "5"
+        t = time.time()
+        step_start(step, "Build access (Windows)")
+        r = build_access()
+        elapsed = int(time.time() - t)
+        if r.timed_out or r.returncode != 0 or not ACCESS_JAR.exists():
+            step_fail(step, "Access build failed")
+            results[step] = ("FAIL", f"Build failed ({elapsed}s)")
+            summary_and_exit(device, results, start_time, 1)
+        step_ok(step, "Access built", elapsed)
+        results[step] = ("PASS", f"Built in {elapsed}s")
     print("")
 
     # --- Step 6: Start logcat ---
@@ -525,6 +724,8 @@ def main() -> None:
     step_start(step, "Start logcat (background)")
     run_cmd(["adb", "-s", device, "logcat", "-c"], timeout=10)
     logcat_proc = start_logcat(device)
+    _cleanup_data["device"] = device
+    _cleanup_data["logcat_proc"] = logcat_proc
     elapsed = int(time.time() - t)
     step_ok(step, "Logcat started", elapsed)
     results[step] = ("PASS", "Logcat collecting")
@@ -542,29 +743,17 @@ def main() -> None:
         if r.stderr:
             print(r.stderr, file=sys.stderr)
         info("Launching MainActivity...")
-        r = run_cmd(
-            ["adb", "-s", device, "shell", "am", "start",
-             "-n", "com.molink.worker/.MainActivity"],
-            timeout=10, print_output=True,
-        )
-        print(r.stdout)
-        if r.returncode != 0:
-            step_fail(step, "MainActivity launch failed")
-            results[step] = ("FAIL", "MainActivity launch failed")
+        if not start_mainactivity_with_retry(device):
+            step_fail(step, "MainActivity launch failed after 3 retries")
+            results[step] = ("FAIL", "MainActivity failed after 3 retries")
             cleanup(device, access_proc, logcat_proc)
             summary_and_exit(device, results, start_time, 1)
         time.sleep(2)
 
     info("Starting worker service...")
-    r = run_cmd(
-        ["adb", "-s", device, "shell", "am", "startservice",
-         "-n", "com.molink.worker/.Socks5ProxyService"],
-        timeout=15, print_output=True,
-    )
-    print(r.stdout)
-    if r.returncode != 0:
-        step_fail(step, "Worker service start failed")
-        results[step] = ("FAIL", "Worker service start failed")
+    if not start_worker_service_with_retry(device):
+        step_fail(step, "Worker service start failed after 3 retries")
+        results[step] = ("FAIL", "Worker service failed after 3 retries")
         cleanup(device, access_proc, logcat_proc)
         summary_and_exit(device, results, start_time, 1)
     time.sleep(SERVICE_WAIT)
@@ -581,6 +770,7 @@ def main() -> None:
         cwd=str(PROJECT_ROOT),
         env=access_env,
     )
+    _cleanup_data["access_proc"] = access_proc
     time.sleep(5)
 
     info("Waiting for access API (port 8080)...")
