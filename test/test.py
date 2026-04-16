@@ -215,7 +215,13 @@ def cleanup_logs() -> None:
     """Remove all files in logs/ directory and recreate it."""
     import shutil
     if LOGS_DIR.exists():
-        shutil.rmtree(LOGS_DIR)
+        # 先杀掉可能占用日志文件的 adb logcat 进程
+        run_cmd(["adb", "logcat", "-c"], timeout=5)
+        try:
+            shutil.rmtree(LOGS_DIR)
+        except PermissionError:
+            # Windows 下 logcat 子进程可能未完全退出，静默忽略
+            pass
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -519,12 +525,14 @@ def test_direct_connection(curl: str, urls: List[str]) -> tuple:
 
 def test_socks_proxy(curl: str, urls: List[str],
                     username: Optional[str] = None,
-                    password: Optional[str] = None) -> tuple:
+                    password: Optional[str] = None,
+                    port: Optional[int] = None) -> tuple:
     """Test HTTP via SOCKS5h proxy. Returns (passed, url, elapsed)."""
+    target_port = port if port is not None else ADB_PORT
     if username and password:
-        proxy_url = f"socks5h://{username}:{password}@127.0.0.1:{ADB_PORT}"
+        proxy_url = f"socks5h://{username}:{password}@127.0.0.1:{target_port}"
     else:
-        proxy_url = f"socks5h://127.0.0.1:{ADB_PORT}"
+        proxy_url = f"socks5h://127.0.0.1:{target_port}"
     for url in urls:
         start = time.time()
         cmd = [curl, "-i", "-x", proxy_url, url, "--max-time", str(PROXY_TIMEOUT)]
@@ -790,88 +798,210 @@ def main() -> None:
     results[step] = ("PASS", "All services running")
     print("")
 
-    # --- Step 8: Curl tests ---
+    # ================================================================
+    # Phase 2: API Tests
+    # ================================================================
+    curl = get_curl_cmd()
+
+    # --- Step 8: GET /molink/devices ---
     step = "8"
     t = time.time()
-    step_start(step, "Curl tests")
-    curl = get_curl_cmd()
-    elapsed = int(time.time() - t)
-
-    # 8a: Direct connection
-    info("[8a] Direct connection")
-    direct_passed, direct_url, direct_elapsed = test_direct_connection(curl, TEST_URLS)
-    if direct_passed:
-        pass_(f"[8a] PASS Direct OK via {direct_url}")
-        results["8a"] = ("PASS", f"Direct OK via {direct_url}")
-    else:
-        warn(f"[8a] WARN Direct unreachable")
-        results["8a"] = ("WARN", "Direct unreachable")
-
-    # 8b: SOCKS proxy — WRONG credentials → expect FAIL
-    info("[8b] SOCKS proxy (wrong credentials)")
-    wrong_passed, _, _ = test_socks_proxy(
-        curl, TEST_URLS, username="admin", password="wrongpassword")
-    if not wrong_passed:
-        pass_("[8b] PASS Wrong credentials rejected")
-        results["8b"] = ("PASS", "Wrong credentials rejected")
-    else:
-        fail("[8b] FAIL Wrong credentials accepted (should be rejected)")
-        results["8b"] = ("FAIL", "Wrong credentials accepted")
-        exit_code = 1
-
-    # 8c: SOCKS proxy — NO credentials → expect FAIL
-    info("[8c] SOCKS proxy (no credentials)")
-    noauth_passed, _, _ = test_socks_proxy(curl, TEST_URLS)
-    if not noauth_passed:
-        pass_("[8c] PASS No credentials rejected")
-        results["8c"] = ("PASS", "No credentials rejected")
-    else:
-        fail("[8c] FAIL No credentials accepted (should be rejected)")
-        results["8c"] = ("FAIL", "No credentials accepted")
-        exit_code = 1
-
-    # 8d: SOCKS proxy — CORRECT credentials → expect PASS
-    info("[8d] SOCKS proxy (correct credentials)")
-    proxy_passed, proxy_url, proxy_elapsed = test_socks_proxy(
-        curl, TEST_URLS, username=SOCKS_AUTH_USER, password=SOCKS_AUTH_PASS)
-    elapsed = int(time.time() - t)
-    if proxy_passed:
-        pass_(f"[8d] PASS SOCKS proxy OK via {proxy_url} ({proxy_elapsed}s)")
-        results["8d"] = ("PASS", f"Proxy OK via {proxy_url}")
-    else:
-        fail(f"[8d] FAIL SOCKS proxy unreachable with correct credentials")
-        results["8d"] = ("FAIL", "Proxy unreachable with correct auth")
-        exit_code = 1
-
-    # 8e: Access /api/status verification
-    info("[8e] Access /api/status verification")
-    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
+    step_start(step, "GET /molink/devices")
+    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/molink/devices"]
     print(f"  $ {' '.join(curl_cmd)}")
     r = run_cmd(curl_cmd, timeout=20, print_output=True)
-    print(f"  Response:\n{r.stdout}")
-
+    elapsed = int(time.time() - t)
+    devices = []
     try:
         import json
         api_data = json.loads(r.stdout)
         print(f"  Pretty:\n{json.dumps(api_data, indent=2)}")
-        ph = api_data.get("proxyHealth", {})
-        # 支持新格式 (reachable) 和旧格式 (available)
-        ph_reachable = ph.get("reachable", ph.get("available", None))
-        if ph_reachable is True:
-            pass_(f"[8e] PASS proxyHealth reachable, latency={ph.get('latencyMs')}ms")
-            results["8e"] = ("PASS", f"proxyHealth reachable, latency={ph.get('latencyMs')}ms")
+        devices = api_data.get("devices", [])
+        alive = [d for d in devices if d.get("forwarderAlive")]
+        if len(alive) > 0:
+            step_ok(step, f"{len(alive)} device(s) forwarderAlive=true", elapsed)
+            results[step] = ("PASS", f"{len(alive)} forwarder alive")
         else:
-            warn(f"[8e] WARN proxyHealth reachable={ph_reachable}")
-            results["8e"] = ("WARN", f"proxyHealth reachable={ph_reachable}")
+            step_fail(step, "no device with forwarderAlive=true")
+            results[step] = ("FAIL", "no forwarder alive")
+            exit_code = 1
     except Exception as e:
-        warn(f"[8e] WARN Could not verify /api/status: {e}")
-        results["8e"] = ("WARN", f"JSON parse error: {e}")
+        step_fail(step, str(e))
+        results[step] = ("FAIL", str(e))
+        exit_code = 1
     print("")
 
-    # --- Step 9: Worker 停止后 SOCKS 代理不可用验证 ---
+    # --- Step 9: GET /molink/config ---
     step = "9"
     t = time.time()
-    step_start(step, "Worker 停止后 SOCKS 代理不可用验证")
+    step_start(step, "GET /molink/config")
+    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/molink/config"]
+    print(f"  $ {' '.join(curl_cmd)}")
+    r = run_cmd(curl_cmd, timeout=20, print_output=True)
+    elapsed = int(time.time() - t)
+    try:
+        import json
+        cfg = json.loads(r.stdout)
+        print(f"  Response: {json.dumps(cfg, indent=2)}")
+        if "localPort" in cfg and "remotePort" in cfg and "apiPort" in cfg:
+            step_ok(step, f"config OK: {cfg}", elapsed)
+            results[step] = ("PASS", f"localPort={cfg['localPort']}")
+        else:
+            step_fail(step, f"missing fields: {cfg}")
+            results[step] = ("FAIL", "missing fields")
+            exit_code = 1
+    except Exception as e:
+        step_fail(step, str(e))
+        results[step] = ("FAIL", str(e))
+        exit_code = 1
+    print("")
+
+    # --- Step 10: POST /molink/devices/{deviceId}/test ---
+    step = "10"
+    t = time.time()
+    step_start(step, "POST /molink/devices/{deviceId}/test")
+    try:
+        import json
+        alive = [d for d in devices if d.get("forwarderAlive")]
+        if not alive:
+            step_fail(step, "no device with forwarderAlive=true")
+            results[step] = ("FAIL", "no alive device")
+            exit_code = 1
+        else:
+            device_id = alive[0]["deviceId"]
+            test_url = f"http://127.0.0.1:8080/molink/devices/{device_id}/test"
+            curl_test = [curl, "-s", "-X", "POST", test_url]
+            print(f"  $ {' '.join(curl_test)}")
+            r2 = run_cmd(curl_test, timeout=20, print_output=True)
+            elapsed = int(time.time() - t)
+            try:
+                test_result = json.loads(r2.stdout)
+            except Exception:
+                step_fail(step, "access service unresponsive")
+                results[step] = ("FAIL", "access service unresponsive")
+                exit_code = 1
+            else:
+                print(f"  Response: {json.dumps(test_result, indent=2)}")
+                if test_result.get("passed") is True:
+                    step_ok(step, f"passed=true for device {device_id}", elapsed)
+                    results[step] = ("PASS", f"device {device_id} proxy reachable")
+                else:
+                    step_fail(step, f"passed={test_result.get('passed')}, error={test_result.get('error')}")
+                    results[step] = ("FAIL", test_result.get("error"))
+                    exit_code = 1
+    except Exception as e:
+        step_fail(step, str(e))
+        results[step] = ("FAIL", str(e))
+        exit_code = 1
+    print("")
+
+    # --- Step 11: POST /molink/devices/{fakeId}/test ---
+    step = "11"
+    t = time.time()
+    step_start(step, "POST /molink/devices/{fakeId}/test")
+    curl_test = [curl, "-s", "-X", "POST", "http://127.0.0.1:8080/molink/devices/fake-id-123/test"]
+    print(f"  $ {' '.join(curl_test)}")
+    r = run_cmd(curl_test, timeout=20, print_output=True)
+    elapsed = int(time.time() - t)
+    try:
+        import json
+        result = json.loads(r.stdout)
+        print(f"  Response: {json.dumps(result, indent=2)}")
+        if result.get("passed") is False and result.get("error") == "Device not found":
+            step_ok(step, "Device not found returned correctly", elapsed)
+            results[step] = ("PASS", "Device not found")
+        else:
+            step_fail(step, f"unexpected: {result}")
+            results[step] = ("FAIL", f"unexpected: {result}")
+            exit_code = 1
+    except Exception as e:
+        step_fail(step, str(e))
+        results[step] = ("FAIL", str(e))
+        exit_code = 1
+    print("")
+
+    # ================================================================
+    # Phase 3: SOCKS Proxy Tests
+    # ================================================================
+
+    # --- Step 12: Direct connection (no proxy) ---
+    step = "12"
+    t = time.time()
+    step_start(step, "Direct connection (no proxy)")
+    direct_passed, direct_url, direct_elapsed = test_direct_connection(curl, TEST_URLS)
+    elapsed = int(time.time() - t)
+    if direct_passed:
+        step_ok(step, f"OK via {direct_url}", elapsed)
+        results[step] = ("PASS", f"Direct OK via {direct_url}")
+    else:
+        step_fail(step, "Direct unreachable")
+        results[step] = ("FAIL", "Direct unreachable")
+        exit_code = 1
+    print("")
+
+    # --- Step 13: SOCKS wrong credentials ---
+    step = "13"
+    t = time.time()
+    step_start(step, "SOCKS wrong credentials")
+    wrong_passed, _, _ = test_socks_proxy(
+        curl, TEST_URLS, username="admin", password="wrongpassword")
+    elapsed = int(time.time() - t)
+    if not wrong_passed:
+        step_ok(step, "Wrong credentials rejected", elapsed)
+        results[step] = ("PASS", "Wrong credentials rejected")
+    else:
+        step_fail(step, "Wrong credentials accepted (should be rejected)")
+        results[step] = ("FAIL", "Wrong credentials accepted")
+        exit_code = 1
+    print("")
+
+    # --- Step 14: SOCKS no credentials ---
+    step = "14"
+    t = time.time()
+    step_start(step, "SOCKS no credentials")
+    noauth_passed, _, _ = test_socks_proxy(curl, TEST_URLS)
+    elapsed = int(time.time() - t)
+    if not noauth_passed:
+        step_ok(step, "No credentials rejected", elapsed)
+        results[step] = ("PASS", "No credentials rejected")
+    else:
+        step_fail(step, "No credentials accepted (should be rejected)")
+        results[step] = ("FAIL", "No credentials accepted")
+        exit_code = 1
+    print("")
+
+    # --- Step 15: SOCKS correct credentials ---
+    step = "15"
+    t = time.time()
+    step_start(step, "SOCKS correct credentials")
+    # 获取第一个存活设备的本地端口
+    try:
+        import json
+        alive = [d for d in devices if d.get("forwarderAlive")]
+        proxy_port = alive[0].get("localPort", 1080) if alive else 1080
+    except Exception:
+        proxy_port = 1080
+    proxy_passed, proxy_url, proxy_elapsed = test_socks_proxy(
+        curl, TEST_URLS, username=SOCKS_AUTH_USER, password=SOCKS_AUTH_PASS,
+        port=proxy_port)
+    elapsed = int(time.time() - t)
+    if proxy_passed:
+        step_ok(step, f"OK via {proxy_url} ({proxy_elapsed}s)", elapsed)
+        results[step] = ("PASS", f"Proxy OK via {proxy_url}")
+    else:
+        step_fail(step, f"Proxy unreachable with correct credentials")
+        results[step] = ("FAIL", "Proxy unreachable")
+        exit_code = 1
+    print("")
+
+    # ================================================================
+    # Phase 4: Degradation Test
+    # ================================================================
+
+    # --- Step 16: Worker stop -> SOCKS5 unreachable via /test ---
+    step = "16"
+    t = time.time()
+    step_start(step, "Worker 停止后 POST /test 验证")
     info("Stopping worker service...")
     run_cmd(
         ["adb", "-s", device, "shell", "am", "force-stop", "com.molink.worker"],
@@ -879,30 +1009,44 @@ def main() -> None:
     )
     time.sleep(2)
 
-    curl_cmd = [curl, "-s", "http://127.0.0.1:8080/api/status"]
-    print(f"  $ {' '.join(curl_cmd)}")
-    r = run_cmd(curl_cmd, timeout=20, print_output=True)
-    print(f"  Response:\n{r.stdout}")
-
     elapsed = int(time.time() - t)
     try:
         import json
-        api_data_after_stop = json.loads(r.stdout)
-        ph = api_data_after_stop.get("proxyHealth", {})
-        # 支持新格式 (reachable) 和旧格式 (available)
-        ph_reachable = ph.get("reachable", ph.get("available", None))
-        unavailable_reason = ph.get("error", ph.get("unavailableReason", ""))
-        print(f"  proxyHealth: reachable={ph_reachable}, reason={unavailable_reason}")
-        if ph_reachable is False:
-            step_ok(step, f"SOCKS proxy unavailable after stop (reason={unavailable_reason})", elapsed)
-            results[step] = ("PASS", f"reachable={ph_reachable}, reason={unavailable_reason}")
-        else:
-            step_fail(step, f"proxyHealth.reachable={ph_reachable} (expected false)")
-            results[step] = ("FAIL", f"reachable={ph_reachable} (expected false)")
+        # 从 Step 8 获取的 devices 列表中找到第一个存活设备
+        alive = [d for d in devices if d.get("forwarderAlive")]
+        if not alive:
+            step_fail(step, "no device with forwarderAlive=true")
+            results[step] = ("FAIL", "no alive device")
             exit_code = 1
+        else:
+            device_id = alive[0]["deviceId"]
+            test_url = f"http://127.0.0.1:8080/molink/devices/{device_id}/test"
+            curl_test = [curl, "-s", "-X", "POST", test_url]
+            print(f"  $ {' '.join(curl_test)}")
+            r2 = run_cmd(curl_test, timeout=20, print_output=True)
+            try:
+                test_result = json.loads(r2.stdout)
+            except Exception:
+                step_fail(step, "access service unresponsive")
+                results[step] = ("FAIL", "access service unresponsive")
+                exit_code = 1
+            else:
+                print(f"  Response: {json.dumps(test_result, indent=2)}")
+                # Dadb TCP forward 仍存活（TCP 隧道有效），但 SOCKS5 服务已停止，期望 passed=false
+                if test_result.get("passed") is False and test_result.get("error") is not None:
+                    step_ok(step, f"Dadb alive, proxy unreachable (correct): {test_result.get('error')}", elapsed)
+                    results[step] = ("PASS", test_result.get("error"))
+                elif test_result.get("passed") is True:
+                    step_fail(step, "passed=true but worker is stopped")
+                    results[step] = ("FAIL", "worker down but passed=true")
+                    exit_code = 1
+                else:
+                    step_fail(step, f"unexpected: {test_result}")
+                    results[step] = ("FAIL", str(test_result))
+                    exit_code = 1
     except Exception as e:
-        fail(f"无法验证停止后的状态: {e}")
-        results[step] = ("FAIL", f"Exception: {e}")
+        step_fail(step, str(e))
+        results[step] = ("FAIL", str(e))
         exit_code = 1
     print("")
 

@@ -7,6 +7,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -133,6 +135,19 @@ public class AdbClientManager {
 
     public Dadb getDadb() {
         return dadb;
+    }
+
+    /**
+     * 获取当前所有已连接的 Dadb 设备列表。
+     * @return Dadb 列表
+     */
+    public List<Dadb> getAllDevices() {
+        try {
+            return Dadb.list();
+        } catch (Exception e) {
+            log.warn("Failed to list devices: {}", e.getMessage());
+            return Collections.emptyList();
+        }
     }
 
     /**

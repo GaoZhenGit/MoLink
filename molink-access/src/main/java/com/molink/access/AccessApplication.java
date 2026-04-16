@@ -2,7 +2,7 @@ package com.molink.access;
 
 import com.molink.access.adb.AdbClientManager;
 import com.molink.access.config.MolinkProperties;
-import com.molink.access.forwarder.ForwarderRunner;
+import com.molink.access.manager.DeviceManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -29,52 +29,21 @@ public class AccessApplication {
     }
 
     @Bean
-    public ForwarderRunner forwarderRunner(AdbClientManager adbClient, MolinkProperties props) {
-        return new ForwarderRunner(adbClient, props.getLocalPort(), props.getRemotePort());
+    public DeviceManager deviceManager(AdbClientManager adbClient, MolinkProperties props) {
+        return new DeviceManager(adbClient, props.getRemotePort(),
+                props.getSocksUsername(), props.getSocksPassword());
     }
 
     @Bean
-    public CommandLineRunner runner(MolinkProperties props, AdbClientManager adbClient,
-            ForwarderRunner forwarderRunner) {
+    public CommandLineRunner runner(MolinkProperties props, DeviceManager deviceManager) {
         return args -> {
             log.info("=== MoLink Access Starting ===");
-            log.info("Local proxy port: {}", props.getLocalPort());
             log.info("Remote port: {}", props.getRemotePort());
             log.info("API port: {}", props.getApiPort());
 
-            // Set up callbacks first (avoid race where background thread connects before callback is registered)
-            adbClient.setOnConnected(dadb -> {
-                try {
-                    forwarderRunner.start();
-                    log.info("ForwarderRunner ready, proxy available -> localhost:{}", props.getLocalPort());
-                } catch (Exception e) {
-                    log.error("ForwarderRunner start failed: {}", e.getMessage(), e);
-                }
-            });
+            deviceManager.start();
 
-            adbClient.setOnDisconnected(() -> {
-                forwarderRunner.stop();
-                log.warn("Device disconnected, waiting for reconnect...");
-            });
-
-            // Start background reconnect thread (continuously monitors for device)
-            adbClient.startAutoReconnect();
-
-            // Wait for device connection (blocks until device is connected)
-            log.info("Waiting for Android device...");
-            adbClient.waitForConnection();
-
-            // Device is now connected; manually trigger onConnected to ensure ForwarderRunner is started
-            if (adbClient.isConnected()) {
-                try {
-                    forwarderRunner.start();
-                    log.info("ForwarderRunner ready, proxy available -> localhost:{}", props.getLocalPort());
-                } catch (Exception e) {
-                    log.error("ForwarderRunner start failed: {}", e.getMessage(), e);
-                }
-            }
-
-            log.info("Service ready, check status at http://localhost:{}/api/status", props.getApiPort());
+            log.info("Service ready, check devices at http://localhost:{}/molink/devices", props.getApiPort());
         };
     }
 }
