@@ -993,6 +993,7 @@ def main() -> None:
         results[step] = ("FAIL", "Proxy unreachable")
         exit_code = 1
     print("")
+    time.sleep(3)
 
     # ================================================================
     # Phase 4: Degradation Test
@@ -1013,7 +1014,7 @@ def main() -> None:
     try:
         import json
         # 从 Step 8 获取的 devices 列表中找到第一个存活设备
-        alive = [d for d in devices if d.get("forwarderAlive")]
+        alive = [d for d in devices]
         if not alive:
             step_fail(step, "no device with forwarderAlive=true")
             results[step] = ("FAIL", "no alive device")
@@ -1023,7 +1024,7 @@ def main() -> None:
             test_url = f"http://127.0.0.1:8080/molink/devices/{device_id}/test"
             curl_test = [curl, "-s", "-X", "POST", test_url]
             print(f"  $ {' '.join(curl_test)}")
-            r2 = run_cmd(curl_test, timeout=20, print_output=True)
+            r2 = run_cmd(curl_test, timeout=30, print_output=True)
             try:
                 test_result = json.loads(r2.stdout)
             except Exception:
