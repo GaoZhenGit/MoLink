@@ -855,13 +855,14 @@ def main() -> None:
         api_data = json.loads(r.stdout)
         print(f"  Pretty:\n{json.dumps(api_data, indent=2)}")
         ph = api_data.get("proxyHealth", {})
-        ph_available = ph.get("available", None)
-        if ph_available is True:
-            pass_(f"[8e] PASS proxyHealth available, latency={ph.get('latencyMs')}ms")
-            results["8e"] = ("PASS", f"proxyHealth available, latency={ph.get('latencyMs')}ms")
+        # 支持新格式 (reachable) 和旧格式 (available)
+        ph_reachable = ph.get("reachable", ph.get("available", None))
+        if ph_reachable is True:
+            pass_(f"[8e] PASS proxyHealth reachable, latency={ph.get('latencyMs')}ms")
+            results["8e"] = ("PASS", f"proxyHealth reachable, latency={ph.get('latencyMs')}ms")
         else:
-            warn(f"[8e] WARN proxyHealth available={ph_available}")
-            results["8e"] = ("WARN", f"proxyHealth available={ph_available}")
+            warn(f"[8e] WARN proxyHealth reachable={ph_reachable}")
+            results["8e"] = ("WARN", f"proxyHealth reachable={ph_reachable}")
     except Exception as e:
         warn(f"[8e] WARN Could not verify /api/status: {e}")
         results["8e"] = ("WARN", f"JSON parse error: {e}")
@@ -888,15 +889,16 @@ def main() -> None:
         import json
         api_data_after_stop = json.loads(r.stdout)
         ph = api_data_after_stop.get("proxyHealth", {})
-        ph_available = ph.get("available", None)
-        unavailable_reason = ph.get("unavailableReason", "")
-        print(f"  proxyHealth: available={ph_available}, reason={unavailable_reason}")
-        if ph_available is False:
+        # 支持新格式 (reachable) 和旧格式 (available)
+        ph_reachable = ph.get("reachable", ph.get("available", None))
+        unavailable_reason = ph.get("error", ph.get("unavailableReason", ""))
+        print(f"  proxyHealth: reachable={ph_reachable}, reason={unavailable_reason}")
+        if ph_reachable is False:
             step_ok(step, f"SOCKS proxy unavailable after stop (reason={unavailable_reason})", elapsed)
-            results[step] = ("PASS", f"available={ph_available}, reason={unavailable_reason}")
+            results[step] = ("PASS", f"reachable={ph_reachable}, reason={unavailable_reason}")
         else:
-            step_fail(step, f"proxyHealth.available={ph_available} (expected false)")
-            results[step] = ("FAIL", f"available={ph_available} (expected false)")
+            step_fail(step, f"proxyHealth.reachable={ph_reachable} (expected false)")
+            results[step] = ("FAIL", f"reachable={ph_reachable} (expected false)")
             exit_code = 1
     except Exception as e:
         fail(f"无法验证停止后的状态: {e}")
