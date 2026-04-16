@@ -37,14 +37,8 @@ public class MainActivity extends Activity {
             if (!isFinishing()) {
                 Socks5ProxyService svc = Socks5ProxyService.getInstance();
                 if (svc != null && svc.isRunning()) {
-                    // v3 Req 1: 读取 shared list，refreshAll() 内部构建自己的 list
-                    List<ConnectionRecord> snapshot = Socks5ProxyService.getConnectionSnapshot();
-                    connCount.setText(String.valueOf(snapshot.size()));  // 活动连接数
-                    historyCount.setText(String.valueOf(svc.getHistoryCount()));  // 历史总数
-                    bytesDown.setText(formatBytes(svc.getTotalBytesDown()));
-                    bytesUp.setText(formatBytes(svc.getTotalBytesUp()));
-                    statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
-                    logAdapter.refreshAll(snapshot);  // 全量刷新
+                    showRunning(svc);
+                    logAdapter.refreshAll(Socks5ProxyService.getConnectionSnapshot());  // 全量刷新
                 }
                 uiHandler.postDelayed(this, UI_REFRESH_INTERVAL_MS);
             }
@@ -55,6 +49,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         statusDot = findViewById(R.id.statusDot);
         statusRunning = findViewById(R.id.statusRunning);
