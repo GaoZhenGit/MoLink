@@ -281,6 +281,50 @@ def is_service_running(device: str) -> bool:
     return "Socks5ProxyService" in r.stdout
 
 
+MAX_ACTIVITY_RETRIES = 3
+ACTIVITY_RETRY_INTERVALS = [5, 10, 15]
+
+
+def is_activity_running(device: str) -> bool:
+    """Return True if MainActivity is in foreground on device."""
+    r = run_cmd(
+        [
+            "adb", "-s", device, "shell", "dumpsys",
+            "activity", "activities"
+        ],
+        timeout=10,
+    )
+    if r.returncode != 0:
+        return False
+    for line in r.stdout.splitlines():
+        if "mResumedActivity" in line and "MainActivity" in line:
+            return True
+    return False
+
+
+def start_mainactivity_with_retry(device: str) -> bool:
+    """Launch MainActivity with up to 3 retries and foreground verification."""
+    for attempt in range(1, MAX_ACTIVITY_RETRIES + 1):
+        info(f"Launching MainActivity (attempt {attempt}/{MAX_ACTIVITY_RETRIES})...")
+        r = run_cmd(
+            [
+                "adb", "-s", device, "shell", "am", "start",
+                "-n", "com.molink.worker/.MainActivity"
+            ],
+            timeout=10,
+            print_output=True,
+        )
+        print(r.stdout)
+        time.sleep(2)
+        if is_activity_running(device):
+            return True
+        if attempt < MAX_ACTIVITY_RETRIES:
+            wait = ACTIVITY_RETRY_INTERVALS[attempt - 1]
+            info(f"MainActivity not running, waiting {wait}s before retry...")
+            time.sleep(wait)
+    return False
+
+
 def start_worker_service_with_retry(device: str) -> bool:
     """Start Socks5ProxyService with up to 3 retries and dumpsys verification."""
     for attempt in range(1, MAX_SERVICE_RETRIES + 1):
@@ -699,15 +743,9 @@ def main() -> None:
         if r.stderr:
             print(r.stderr, file=sys.stderr)
         info("Launching MainActivity...")
-        r = run_cmd(
-            ["adb", "-s", device, "shell", "am", "start",
-             "-n", "com.molink.worker/.MainActivity"],
-            timeout=10, print_output=True,
-        )
-        print(r.stdout)
-        if r.returncode != 0:
-            step_fail(step, "MainActivity launch failed")
-            results[step] = ("FAIL", "MainActivity launch failed")
+        if not start_mainactivity_with_retry(device):
+            step_fail(step, "MainActivity launch failed after 3 retries")
+            results[step] = ("FAIL", "MainActivity failed after 3 retries")
             cleanup(device, access_proc, logcat_proc)
             summary_and_exit(device, results, start_time, 1)
         time.sleep(2)
