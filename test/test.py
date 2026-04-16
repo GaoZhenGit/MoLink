@@ -30,8 +30,8 @@ LOGCAT_TIMEOUT = 15
 PROXY_TIMEOUT = 15
 
 # SOCKS5 认证测试凭证（需与 molink-worker/app/build.gradle 中 BuildConfig 保持一致）
-SOCKS_AUTH_USER = "admin"
-SOCKS_AUTH_PASS = "password"
+SOCKS_AUTH_USER = "socks5"
+SOCKS_AUTH_PASS = "password123"
 
 PROJECT_ROOT = Path("D:/project/MoLink")
 WORKER_DIR = PROJECT_ROOT / "molink-worker"
