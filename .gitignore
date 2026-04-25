@@ -12,7 +12,7 @@ Thumbs.db
 *.tmp
 *.bak
 *.swp
-target\
+molink-access\target\
 build\
 molink-worker\.gradle\
 molink-worker\build\
