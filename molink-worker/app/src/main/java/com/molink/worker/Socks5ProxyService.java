@@ -16,6 +16,7 @@ import android.os.SystemClock;
 import androidx.core.app.NotificationCompat;
 
 import com.molink.worker.netty.ConnectionLifecycleManager;
+import com.molink.worker.netty.HttpProxyStateHandler;
 import com.molink.worker.netty.Socks5StateHandler;
 
 import io.netty.bootstrap.ServerBootstrap;
@@ -23,6 +24,8 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpRequestDecoder;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -52,6 +55,7 @@ public class Socks5ProxyService extends Service {
     private NioEventLoopGroup eventLoopGroup;
     private volatile boolean isRunning = false;
     private volatile long startTime = 0;
+    private ProxyProtocol proxyType = ProxyProtocol.SOCKS5;
     private StatusHttpServer httpServer;
 
     // ========== UI 统计相关（static 供静态方法直接访问）==========
@@ -114,9 +118,16 @@ public class Socks5ProxyService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "onStartCommand, starting foreground");
+        // 读取 Intent 中的协议类型
+        if (intent != null) {
+            String typeStr = intent.getStringExtra("proxy_type");
+            if (typeStr != null) {
+                proxyType = ProxyProtocol.fromString(typeStr);
+            }
+        }
+        Log.d(TAG, "onStartCommand, starting foreground, protocol=" + proxyType.getDisplayName());
         startForeground(NOTIFICATION_ID, createNotification());
-        startSocks5Server();
+        startServer();
         // 启动 HTTP 状态服务
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
@@ -159,6 +170,10 @@ public class Socks5ProxyService extends Service {
         return SOCKS5_PORT;
     }
 
+    public ProxyProtocol getProxyType() {
+        return proxyType;
+    }
+
     public long getUptime() {
         if (startTime == 0) return 0;
         return SystemClock.elapsedRealtime() / 1000 - startTime;
@@ -179,14 +194,15 @@ public class Socks5ProxyService extends Service {
     }
 
     private Notification createNotification() {
+        String protocol = proxyType.getDisplayName();
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("MoLink Worker")
-                .setContentText("SOCKS5 代理服务运行中，端口 " + SOCKS5_PORT)
+                .setContentText(protocol + " 代理服务运行中，端口 " + SOCKS5_PORT)
                 .setSmallIcon(R.drawable.ic_notification)
                 .build();
     }
 
-    private void startSocks5Server() {
+    private void startServer() {
         if (isRunning) {
             Log.w(TAG, "Server already running");
             return;
@@ -194,7 +210,6 @@ public class Socks5ProxyService extends Service {
         isRunning = true;
         startTime = SystemClock.elapsedRealtime() / 1000;
 
-        // NioEventLoopGroup 使用默认值（CPU cores * 2），按需扩展不限制线程数
         eventLoopGroup = new NioEventLoopGroup();
 
         ServerBootstrap bs = new ServerBootstrap();
@@ -203,19 +218,24 @@ public class Socks5ProxyService extends Service {
           .childHandler(new ChannelInitializer<Channel>() {
               @Override
               protected void initChannel(Channel ch) throws Exception {
-                  ch.pipeline().addLast(new Socks5StateHandler());
+                  if (proxyType == ProxyProtocol.HTTP) {
+                      ch.pipeline().addLast("httpDecoder", new HttpRequestDecoder());
+                      ch.pipeline().addLast("httpAggregator", new HttpObjectAggregator(8192));
+                      ch.pipeline().addLast(new HttpProxyStateHandler());
+                  } else {
+                      ch.pipeline().addLast(new Socks5StateHandler());
+                  }
               }
           });
 
-        // 仅监听 IPv4
         try {
             bs.bind("127.0.0.1", SOCKS5_PORT).syncUninterruptibly();
-            Log.i(TAG, "ServerSocket listening on 127.0.0.1:" + SOCKS5_PORT);
+            Log.i(TAG, "ServerSocket listening on 127.0.0.1:" + SOCKS5_PORT + " (" + proxyType.getDisplayName() + ")");
         } catch (Exception e) {
             Log.e(TAG, "Failed to bind server socket", e);
             isRunning = false;
         }
 
-        Log.i(TAG, "SOCKS5 server started on port " + SOCKS5_PORT);
+        Log.i(TAG, proxyType.getDisplayName() + " proxy server started on port " + SOCKS5_PORT);
     }
 }
