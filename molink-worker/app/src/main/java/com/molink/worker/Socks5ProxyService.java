@@ -219,6 +219,7 @@ public class Socks5ProxyService extends Service {
               @Override
               protected void initChannel(Channel ch) throws Exception {
                   if (proxyType == ProxyProtocol.HTTP) {
+                      ch.pipeline().addLast(new HttpProxyStateHandler.ProtocolDetectingHandler());
                       ch.pipeline().addLast("httpDecoder", new HttpRequestDecoder());
                       ch.pipeline().addLast("httpAggregator", new HttpObjectAggregator(8192));
                       ch.pipeline().addLast(new HttpProxyStateHandler());

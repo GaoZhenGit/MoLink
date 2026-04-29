@@ -15,6 +15,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
 
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -92,6 +93,11 @@ public final class Socks5StateHandler extends ChannelInboundHandlerAdapter {
         }
         int ver = in.readByte();
         if (ver != SOCKS_VERSION) {
+            // 检测是否为 HTTP CONNECT 请求（第一个字节是 'C' = 0x43）
+            if (ver == 'C') {
+                sendHttpError(ctx, 501, "Not Implemented: this server only supports SOCKS5 protocol");
+                return;
+            }
             Log.w(TAG, "Unsupported SOCKS version: " + ver);
             ctx.close();
             return;
@@ -331,6 +337,14 @@ public final class Socks5StateHandler extends ChannelInboundHandlerAdapter {
         out.writeBytes(localIp);
         out.writeShort(localPort);
         ctx.writeAndFlush(out);
+    }
+
+    /** 向误连的 HTTP 客户端返回 HTTP 错误响应 */
+    private void sendHttpError(ChannelHandlerContext ctx, int statusCode, String message) {
+        String body = "HTTP/1.1 " + statusCode + " " + message + "\r\nConnection: close\r\n\r\n";
+        ByteBuf out = ctx.alloc().buffer();
+        out.writeBytes(body.getBytes(StandardCharsets.US_ASCII));
+        ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
     }
 
     @Override
