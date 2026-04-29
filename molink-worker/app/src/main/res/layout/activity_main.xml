@@ -47,6 +47,43 @@
             android:visibility="gone"/>
     </LinearLayout>
 
+    <!-- ===== 1b. Proxy Protocol Switch ===== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#F0F4F8"
+        android:padding="8dp"
+        android:layout_marginBottom="12dp"
+        android:layout_marginTop="0dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="代理协议"
+            android:textSize="14sp"
+            android:textColor="#666666"/>
+
+        <TextView
+            android:id="@+id/protocolLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SOCKS5"
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:layout_marginEnd="8dp"/>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/proxyProtocolSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textOff="SOCKS"
+            android:textOn="HTTP"
+            android:showText="true"/>
+    </LinearLayout>
+
     <!-- ===== 2. 统计指标区 ===== -->
     <LinearLayout
         android:layout_width="match_parent"

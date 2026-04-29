@@ -8,6 +8,7 @@ import android.os.Looper;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
+import androidx.appcompat.widget.SwitchCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import java.util.List;
@@ -25,6 +26,9 @@ public class MainActivity extends Activity {
     private RecyclerView connectionLogList;
     private ConnectionLogAdapter logAdapter;
     private Button toggleButton;
+    private SwitchCompat protocolSwitch;
+    private TextView protocolLabel;
+    private boolean isSwitching = false;  // 切换中标志，防止轮询覆盖状态
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
@@ -71,6 +75,38 @@ public class MainActivity extends Activity {
         logAdapter = new ConnectionLogAdapter();
         connectionLogList.setLayoutManager(new LinearLayoutManager(this));
         connectionLogList.setAdapter(logAdapter);
+
+        protocolSwitch = findViewById(R.id.proxyProtocolSwitch);
+        protocolLabel = findViewById(R.id.protocolLabel);
+
+        // Switch 切换监听：停止旧服务 → 启动新协议服务 → 轮询自动同步 UI
+        protocolSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (isSwitching) return;  // 防止 setChecked 触发重复执行
+            String newType = isChecked ? "http" : "socks5";
+            Socks5ProxyService svc = Socks5ProxyService.getInstance();
+
+            // 立即禁用 Switch，显示"切换中"状态
+            protocolSwitch.setEnabled(false);
+            isSwitching = true;
+
+            if (svc != null && svc.isRunning()) {
+                stopService(new Intent(this, Socks5ProxyService.class));
+                Intent newIntent = new Intent(this, Socks5ProxyService.class);
+                newIntent.putExtra("proxy_type", newType);
+                // 延迟启动，确保旧服务完全停止
+                uiHandler.postDelayed(() -> {
+                    startService(newIntent);
+                }, 500);
+            } else {
+                // 服务未运行，直接启动新协议
+                Intent newIntent = new Intent(this, Socks5ProxyService.class);
+                newIntent.putExtra("proxy_type", newType);
+                startService(newIntent);
+            }
+            // 延长轮询间隔，等待服务启动
+            uiHandler.removeCallbacks(uiPoller);
+            uiHandler.postDelayed(uiPoller, 2000);
+        });
     }
 
     @Override
@@ -90,19 +126,23 @@ public class MainActivity extends Activity {
     public void onToggleClick(View v) {
         Socks5ProxyService svc = Socks5ProxyService.getInstance();
         if (svc != null && svc.isRunning()) {
-            // ===== 显式停止 =====
             stopService(new Intent(this, Socks5ProxyService.class));
-            // 立即刷新 UI
             showStopped();
         } else {
-            // ===== 显式启动 =====
-            startService(new Intent(this, Socks5ProxyService.class));
-            // 乐观更新 UI
+            Intent intent = new Intent(this, Socks5ProxyService.class);
+            intent.putExtra("proxy_type", getCurrentProxyTypeString());
+            startService(intent);
             showRunning(null);
         }
-        // 重新触发轮询，确保状态最终一致
         uiHandler.removeCallbacks(uiPoller);
         uiHandler.postDelayed(uiPoller, 1500);
+    }
+
+    private String getCurrentProxyTypeString() {
+        if (protocolSwitch != null && protocolSwitch.isChecked()) {
+            return "http";
+        }
+        return "socks5";
     }
 
     private void updateUI(Socks5ProxyService svc) {
@@ -115,7 +155,8 @@ public class MainActivity extends Activity {
 
     private void showStopped() {
         toggleButton.setText("启动服务");
-        statusRunning.setText("SOCKS5 服务已停止");
+        String protocol = getCurrentProxyTypeString();
+        statusRunning.setText(("http".equals(protocol) ? "HTTP" : "SOCKS5") + " 服务已停止");
         statusDot.setBackgroundResource(R.drawable.circle_gray);
         statusPort.setVisibility(View.GONE);
         statusUptime.setVisibility(View.GONE);
@@ -124,11 +165,15 @@ public class MainActivity extends Activity {
         bytesDown.setText("--");
         bytesUp.setText("--");
         logAdapter.refreshAll(java.util.Collections.emptyList());
+        protocolSwitch.setEnabled(false);
+        isSwitching = false;
     }
 
     private void showRunning(Socks5ProxyService svc) {
         toggleButton.setText("停止服务");
-        statusRunning.setText("SOCKS5 运行中");
+        ProxyProtocol proto = svc != null ? svc.getProxyType() :
+                ("http".equals(getCurrentProxyTypeString()) ? ProxyProtocol.HTTP : ProxyProtocol.SOCKS5);
+        statusRunning.setText(proto.getDisplayName() + " 运行中");
         statusDot.setBackgroundResource(R.drawable.circle_green);
         statusPort.setVisibility(View.VISIBLE);
         statusUptime.setVisibility(View.VISIBLE);
@@ -136,7 +181,11 @@ public class MainActivity extends Activity {
             statusPort.setText("端口:" + svc.getPort());
             statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
             connCount.setText(String.valueOf(svc.getConnectionCount()));
+            protocolSwitch.setChecked(svc.getProxyType() == ProxyProtocol.HTTP);
+            protocolLabel.setText(svc.getProxyType().getDisplayName());
         }
+        protocolSwitch.setEnabled(true);
+        isSwitching = false;
     }
 
     private String formatBytes(long bytes) {
