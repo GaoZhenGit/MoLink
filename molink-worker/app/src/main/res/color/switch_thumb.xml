@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Checked + disabled (切换中 HTTP 状态) — 绿色 -->
+    <item android:state_checked="true" android:state_enabled="false" android:color="#4CAF50"/>
+    <!-- Checked + enabled — 绿色 -->
+    <item android:state_checked="true" android:state_enabled="true" android:color="#4CAF50"/>
+    <!-- Disabled — 灰色 -->
+    <item android:state_enabled="false" android:color="#BDBDBD"/>
+    <!-- Default (unchecked + enabled) -->
+    <item android:color="#9E9E9E"/>
+</selector>

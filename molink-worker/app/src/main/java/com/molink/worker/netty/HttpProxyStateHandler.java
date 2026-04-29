@@ -22,17 +22,42 @@ import io.netty.handler.timeout.IdleStateHandler;
 
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+
+import io.netty.handler.codec.ByteToMessageDecoder;
 
 /**
  * HTTP CONNECT 代理协议状态机 Handler。
- * Pipeline: HttpRequestDecoder → HttpObjectAggregator → HttpProxyStateHandler → ForwardHandler
+ * Pipeline: ProtocolDetectingHandler → HttpRequestDecoder → HttpObjectAggregator → HttpProxyStateHandler → ForwardHandler
  *
  * 仅支持 CONNECT 方法。认证成功后建立隧道，ForwardHandler 接管双向转发。
  */
 public final class HttpProxyStateHandler extends ChannelInboundHandlerAdapter {
 
     private static final String TAG = "HttpProxyStateHandler";
+
+    /**
+     * 协议检测：在 HttpRequestDecoder 之前，检查第一个字节是否为 SOCKS5（0x05）。
+     * 如果是，立即返回 HTTP 501 错误；否则移除此 handler，让 HttpRequestDecoder 处理。
+     */
+    public static class ProtocolDetectingHandler extends ByteToMessageDecoder {
+        private static final String ERR_BODY = "HTTP/1.1 501 Not Implemented: this server only supports HTTP CONNECT\r\nConnection: close\r\n\r\n";
+
+        @Override
+        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+            if (in.readableBytes() < 1) return;
+            byte firstByte = in.getByte(in.readerIndex());
+            if (firstByte == 0x05) {
+                // SOCKS5 协议，不支持
+                ByteBuf err = ctx.alloc().buffer();
+                err.writeBytes(ERR_BODY.getBytes(StandardCharsets.US_ASCII));
+                ctx.writeAndFlush(err).addListener(ChannelFutureListener.CLOSE);
+            }
+            // 不是 SOCKS5 → 移除此 handler，数据交给 HttpRequestDecoder
+            ctx.pipeline().remove(this);
+        }
+    }
 
     private SessionContext sessionCtx;
     private String targetHost;

@@ -7,8 +7,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.widget.Button;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
-import androidx.appcompat.widget.SwitchCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import java.util.List;
@@ -26,13 +27,13 @@ public class MainActivity extends Activity {
     private RecyclerView connectionLogList;
     private ConnectionLogAdapter logAdapter;
     private Button toggleButton;
-    private SwitchCompat protocolSwitch;
-    private TextView protocolLabel;
-    private boolean isSwitching = false;  // 切换中标志，防止轮询覆盖状态
+    private RadioGroup protocolRadioGroup;
+    private RadioButton socks5Radio;
+    private RadioButton httpRadio;
+    private boolean isSwitching = false;
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
-    // v3 Req 1: 0.5 秒全量轮询，完全替代 StatusListener 回调
     private static final long UI_REFRESH_INTERVAL_MS = 500;
 
     private final Runnable uiPoller = new Runnable() {
@@ -43,12 +44,12 @@ public class MainActivity extends Activity {
                 if (svc != null && svc.isRunning()) {
                     showRunning(svc);
                     List<ConnectionRecord> snapshot = Socks5ProxyService.getConnectionSnapshot();
-                    connCount.setText(String.valueOf(snapshot.size()));  // 活动连接数
-                    historyCount.setText(String.valueOf(svc.getHistoryCount()));  // 历史总数
+                    connCount.setText(String.valueOf(snapshot.size()));
+                    historyCount.setText(String.valueOf(svc.getHistoryCount()));
                     bytesDown.setText(formatBytes(svc.getTotalBytesDown()));
                     bytesUp.setText(formatBytes(svc.getTotalBytesUp()));
                     statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
-                    logAdapter.refreshAll(snapshot);  // 全量刷新
+                    logAdapter.refreshAll(snapshot);
                 }
                 uiHandler.postDelayed(this, UI_REFRESH_INTERVAL_MS);
             }
@@ -76,34 +77,32 @@ public class MainActivity extends Activity {
         connectionLogList.setLayoutManager(new LinearLayoutManager(this));
         connectionLogList.setAdapter(logAdapter);
 
-        protocolSwitch = findViewById(R.id.proxyProtocolSwitch);
-        protocolLabel = findViewById(R.id.protocolLabel);
+        protocolRadioGroup = findViewById(R.id.protocolRadioGroup);
+        socks5Radio = findViewById(R.id.socks5Radio);
+        httpRadio = findViewById(R.id.httpRadio);
 
-        // Switch 切换监听：停止旧服务 → 启动新协议服务 → 轮询自动同步 UI
-        protocolSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (isSwitching) return;  // 防止 setChecked 触发重复执行
-            String newType = isChecked ? "http" : "socks5";
+        // 协议切换监听：停止旧服务 → 启动新协议服务 → 轮询自动同步 UI
+        protocolRadioGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            if (isSwitching) return;
+            String newType = checkedId == R.id.socks5Radio ? "socks5" : "http";
             Socks5ProxyService svc = Socks5ProxyService.getInstance();
 
-            // 立即禁用 Switch，显示"切换中"状态
-            protocolSwitch.setEnabled(false);
             isSwitching = true;
+            socks5Radio.setEnabled(false);
+            httpRadio.setEnabled(false);
 
             if (svc != null && svc.isRunning()) {
                 stopService(new Intent(this, Socks5ProxyService.class));
                 Intent newIntent = new Intent(this, Socks5ProxyService.class);
                 newIntent.putExtra("proxy_type", newType);
-                // 延迟启动，确保旧服务完全停止
                 uiHandler.postDelayed(() -> {
                     startService(newIntent);
                 }, 500);
             } else {
-                // 服务未运行，直接启动新协议
                 Intent newIntent = new Intent(this, Socks5ProxyService.class);
                 newIntent.putExtra("proxy_type", newType);
                 startService(newIntent);
             }
-            // 延长轮询间隔，等待服务启动
             uiHandler.removeCallbacks(uiPoller);
             uiHandler.postDelayed(uiPoller, 2000);
         });
@@ -122,7 +121,6 @@ public class MainActivity extends Activity {
         uiHandler.removeCallbacks(uiPoller);
     }
 
-    /** 显式启动 / 显式停止 */
     public void onToggleClick(View v) {
         Socks5ProxyService svc = Socks5ProxyService.getInstance();
         if (svc != null && svc.isRunning()) {
@@ -139,18 +137,10 @@ public class MainActivity extends Activity {
     }
 
     private String getCurrentProxyTypeString() {
-        if (protocolSwitch != null && protocolSwitch.isChecked()) {
+        if (protocolRadioGroup.getCheckedRadioButtonId() == R.id.httpRadio) {
             return "http";
         }
         return "socks5";
-    }
-
-    private void updateUI(Socks5ProxyService svc) {
-        if (svc == null || !svc.isRunning()) {
-            showStopped();
-        } else {
-            showRunning(svc);
-        }
     }
 
     private void showStopped() {
@@ -165,7 +155,8 @@ public class MainActivity extends Activity {
         bytesDown.setText("--");
         bytesUp.setText("--");
         logAdapter.refreshAll(java.util.Collections.emptyList());
-        protocolSwitch.setEnabled(false);
+        socks5Radio.setEnabled(true);
+        httpRadio.setEnabled(true);
         isSwitching = false;
     }
 
@@ -181,10 +172,11 @@ public class MainActivity extends Activity {
             statusPort.setText("端口:" + svc.getPort());
             statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
             connCount.setText(String.valueOf(svc.getConnectionCount()));
-            protocolSwitch.setChecked(svc.getProxyType() == ProxyProtocol.HTTP);
-            protocolLabel.setText(svc.getProxyType().getDisplayName());
+            // 根据实际协议同步 RadioGroup 选中状态
+            protocolRadioGroup.check(svc.getProxyType() == ProxyProtocol.HTTP ? R.id.httpRadio : R.id.socks5Radio);
         }
-        protocolSwitch.setEnabled(true);
+        socks5Radio.setEnabled(true);
+        httpRadio.setEnabled(true);
         isSwitching = false;
     }
 

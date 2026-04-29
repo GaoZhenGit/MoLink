@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -47,7 +48,7 @@
             android:visibility="gone"/>
     </LinearLayout>
 
-    <!-- ===== 1b. Proxy Protocol Switch ===== -->
+    <!-- ===== 1b. Proxy Protocol RadioGroup ===== -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -66,22 +67,28 @@
             android:textSize="14sp"
             android:textColor="#666666"/>
 
-        <TextView
-            android:id="@+id/protocolLabel"
+        <RadioGroup
+            android:id="@+id/protocolRadioGroup"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="SOCKS5"
-            android:textSize="13sp"
-            android:textColor="#666666"
-            android:layout_marginEnd="8dp"/>
+            android:orientation="horizontal">
 
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/proxyProtocolSwitch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textOff="SOCKS"
-            android:textOn="HTTP"
-            android:showText="true"/>
+            <RadioButton
+                android:id="@+id/socks5Radio"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="SOCKS5"
+                android:textSize="14sp"
+                android:checked="true"/>
+
+            <RadioButton
+                android:id="@+id/httpRadio"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="HTTP"
+                android:textSize="14sp"
+                android:layout_marginStart="8dp"/>
+        </RadioGroup>
     </LinearLayout>
 
     <!-- ===== 2. 统计指标区 ===== -->
@@ -191,7 +198,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- ===== 3. 连接日志标题 ===== -->
+    <!-- ===== 3. 连接日志区域（自适应填充剩余空间）===== -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -200,16 +207,16 @@
         android:textStyle="bold"
         android:layout_marginBottom="8dp"/>
 
-    <!-- ===== 4. 连接日志 RecyclerView（恒定高度 280dp）===== -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/connectionLogList"
         android:layout_width="match_parent"
-        android:layout_height="280dp"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:layout_marginBottom="12dp"
         android:background="#FAFAFA"
         android:padding="4dp"/>
 
-    <!-- ===== 5. 控制按钮 ===== -->
+    <!-- ===== 5. 控制按钮（始终固定在底部）===== -->
     <Button
         android:id="@+id/toggleButton"
         android:layout_width="match_parent"
