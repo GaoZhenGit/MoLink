@@ -238,6 +238,7 @@ Client → ReadTimeoutHandler → MixProtocolDetector(检测非0x05)
 
 ## 9. 注意事项
 
+- **禁止提交 git**：实施过程中不得自行 git commit，由用户决定何时提交
 - Gradle 版本、AGP 版本、Android 框架版本均不修改
 - 端口号不变（BuildConfig.SOCKS_PORT）
 - 认证凭据复用 BuildConfig.SOCKS_USERNAME/PASSWORD
