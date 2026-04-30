@@ -14,6 +14,7 @@ Thumbs.db
 *.swp
 molink-access/target/
 build/
+build*/
 molink-worker/.gradle/
 molink-worker/build/
 molink-worker/app/build/

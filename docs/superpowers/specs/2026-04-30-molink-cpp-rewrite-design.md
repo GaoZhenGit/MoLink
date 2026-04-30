@@ -9,7 +9,7 @@
 ## 约束
 
 - **语言**: C++17
-- **编译器**: MinGW GCC (D:/software/w64devkit/x64)
+- **编译器**: MinGW GCC 32-bit (D:/software/w64devkit/x86)，因为 AdbWinApi.dll 是 PE32 格式
 - **构建**: CMake（已加入 PATH）
 - **运行环境**: Windows 10，不允许运行 adb.exe
 - **进程模型**: 单进程前台守护

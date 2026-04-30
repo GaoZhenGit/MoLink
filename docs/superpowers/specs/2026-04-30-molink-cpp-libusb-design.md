@@ -17,9 +17,9 @@ AOSP adb 源码中 `client/usb_libusb.cpp` 即采用此路线，已在 Linux/mac
 ## 技术栈
 
 - **语言/标准**: C++17
-- **编译器**: MinGW GCC 32-bit (`D:/software/w64devkit/x86`)
+- **编译器**: MinGW GCC 64-bit (`D:/software/w64devkit/x64`)
 - **构建**: CMake 3.14+
-- **USB 库**: libusb 1.0.29, MinGW32 预编译 DLL + 头文件
+- **USB 库**: libusb 1.0.29, MinGW64 预编译 DLL + 头文件
 - **平台**: Windows, Winsock2
 
 ## 架构
@@ -37,7 +37,7 @@ AOSP adb 源码中 `client/usb_libusb.cpp` 即采用此路线，已在 Linux/mac
 │  libusb 封装：设备发现/打开/序列号/Bulk读写 │
 ├──────────────────────────────────────────┤
 │            libusb-1.0.dll                │
-│       (MinGW32 预编译, WinUSB后端)        │
+│       (MinGW64 预编译, WinUSB后端)        │
 └──────────────────────────────────────────┘
 ```
 
@@ -49,8 +49,8 @@ AOSP adb 源码中 `client/usb_libusb.cpp` 即采用此路线，已在 Linux/mac
 molink-access-cpp/
 ├── CMakeLists.txt
 ├── libs/
-│   ├── libusb-1.0.dll          # MinGW32 运行时 DLL
-│   └── libusb-1.0.dll.a        # MinGW32 导入库
+│   ├── libusb-1.0.dll          # MinGW64 运行时 DLL
+│   └── libusb-1.0.dll.a        # MinGW64 导入库
 ├── vendor/
 │   └── libusb/
 │       └── libusb.h            # libusb API 头文件
@@ -155,8 +155,8 @@ private:
 | 源路径 (7z内) | 目标路径 | 用途 |
 |---|---|---|
 | `include/libusb.h` | `vendor/libusb/libusb.h` | 编译时头文件 |
-| `MinGW32/dll/libusb-1.0.dll` | `libs/libusb-1.0.dll` | 运行时动态库 |
-| `MinGW32/static/libusb-1.0.dll.a` | `libs/libusb-1.0.dll.a` | 链接时导入库 |
+| `MinGW64/dll/libusb-1.0.dll` | `libs/libusb-1.0.dll` | 运行时动态库 |
+| `MinGW64/static/libusb-1.0.dll.a` | `libs/libusb-1.0.dll.a` | 链接时导入库 |
 
 **CMake 配置**：
 ```cmake
@@ -187,6 +187,6 @@ POC 成功标准（与上一版一致）：
 | 风险 | 影响 | 缓解措施 |
 |---|---|---|
 | WinUSB 驱动未关联到 ADB 接口 | USB 设备打不开 | 用 Zadig 工具将设备接口驱动替换为 WinUSB |
-| libusb MinGW32 DLL 不兼容 w64devkit | 链接或运行时错误 | 备选：从源码用 MinGW 编译 libusb |
+| libusb MinGW64 DLL 不兼容 w64devkit | 链接或运行时错误 | 备选：从源码用 MinGW 编译 libusb |
 | 多设备竞争 ADB 接口声明 | claim_interface 失败 | 检查并 detach 内核驱动后重试 |
 | 设备连接/断开检测延迟 | 轮询间隔不准确 | POC 阶段不处理，Phase 2 解决 |
