@@ -140,7 +140,8 @@ public final class HttpProxyStateHandler extends ChannelInboundHandlerAdapter {
         // 创建 ConnectionRecord
         String clientIp = ctx.channel().remoteAddress().toString();
         if (clientIp.startsWith("/")) clientIp = clientIp.substring(1);
-        ConnectionRecord record = new ConnectionRecord(clientIp, targetHost, targetPort, System.currentTimeMillis());
+        ConnectionRecord record = new ConnectionRecord(clientIp, targetHost, targetPort,
+                System.currentTimeMillis(), "HTTP");
         Socks5ProxyService.registerConnection(record);
 
         // 本地 DNS 解析

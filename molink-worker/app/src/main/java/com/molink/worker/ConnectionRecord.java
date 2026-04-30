@@ -22,15 +22,18 @@ public class ConnectionRecord {
     public final String targetHost;
     public final int targetPort;
     public final long startTime;
+    public final String protocol;
     public final AtomicLong bytesDown = new AtomicLong(0);
     public final AtomicLong bytesUp = new AtomicLong(0);
     public volatile ConnectionState state = ConnectionState.ACTIVE;  // 原 active + failed
 
-    public ConnectionRecord(String clientIp, String targetHost, int targetPort, long startTime) {
+    public ConnectionRecord(String clientIp, String targetHost, int targetPort,
+                            long startTime, String protocol) {
         this.clientIp = clientIp;
         this.targetHost = targetHost;
         this.targetPort = targetPort;
         this.startTime = startTime;
+        this.protocol = protocol;
     }
 
     public long getBytesDown() { return bytesDown.get(); }

@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat;
 
 import com.molink.worker.netty.ConnectionLifecycleManager;
 import com.molink.worker.netty.HttpProxyStateHandler;
+import com.molink.worker.netty.MixProtocolDetector;
 import com.molink.worker.netty.Socks5StateHandler;
 
 import io.netty.bootstrap.ServerBootstrap;
@@ -55,7 +56,7 @@ public class Socks5ProxyService extends Service {
     private NioEventLoopGroup eventLoopGroup;
     private volatile boolean isRunning = false;
     private volatile long startTime = 0;
-    private ProxyProtocol proxyType = ProxyProtocol.SOCKS5;
+    private ProxyProtocol proxyType = ProxyProtocol.MIX;
     private StatusHttpServer httpServer;
 
     // ========== UI 统计相关（static 供静态方法直接访问）==========
@@ -174,6 +175,18 @@ public class Socks5ProxyService extends Service {
         return proxyType;
     }
 
+    public void setProxyType(ProxyProtocol type) {
+        this.proxyType = type;
+        updateNotification();
+    }
+
+    private void updateNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID, createNotification());
+        }
+    }
+
     public long getUptime() {
         if (startTime == 0) return 0;
         return SystemClock.elapsedRealtime() / 1000 - startTime;
@@ -218,7 +231,11 @@ public class Socks5ProxyService extends Service {
           .childHandler(new ChannelInitializer<Channel>() {
               @Override
               protected void initChannel(Channel ch) throws Exception {
-                  if (proxyType == ProxyProtocol.HTTP) {
+                  if (proxyType == ProxyProtocol.MIX) {
+                      ch.pipeline().addLast("readTimeoutHandler",
+                              new io.netty.handler.timeout.ReadTimeoutHandler(5, java.util.concurrent.TimeUnit.SECONDS));
+                      ch.pipeline().addLast(new MixProtocolDetector());
+                  } else if (proxyType == ProxyProtocol.HTTP) {
                       ch.pipeline().addLast(new HttpProxyStateHandler.ProtocolDetectingHandler());
                       ch.pipeline().addLast("httpDecoder", new HttpRequestDecoder());
                       ch.pipeline().addLast("httpAggregator", new HttpObjectAggregator(8192));

@@ -78,8 +78,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="SOCKS5"
-                android:textSize="14sp"
-                android:checked="true"/>
+                android:textSize="14sp"/>
 
             <RadioButton
                 android:id="@+id/httpRadio"
@@ -87,6 +86,15 @@
                 android:layout_height="wrap_content"
                 android:text="HTTP"
                 android:textSize="14sp"
+                android:layout_marginStart="8dp"/>
+
+            <RadioButton
+                android:id="@+id/mixRadio"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MIX"
+                android:textSize="14sp"
+                android:checked="true"
                 android:layout_marginStart="8dp"/>
         </RadioGroup>
     </LinearLayout>

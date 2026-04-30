@@ -20,6 +20,19 @@
             android:layout_height="8dp"
             android:background="@drawable/circle_gray"/>
 
+        <!-- 协议标签 -->
+        <TextView
+            android:id="@+id/connProtocol"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SOCKS5"
+            android:textSize="10sp"
+            android:textColor="#FFFFFF"
+            android:background="#2196F3"
+            android:paddingHorizontal="4dp"
+            android:paddingVertical="1dp"
+            android:layout_marginStart="6dp"/>
+
         <!-- 目标地址 -->
         <TextView
             android:id="@+id/connTargetHost"

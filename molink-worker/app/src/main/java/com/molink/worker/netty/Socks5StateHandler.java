@@ -256,7 +256,8 @@ public final class Socks5StateHandler extends ChannelInboundHandlerAdapter {
         // 创建 ConnectionRecord 并注册到 Service 的历史列表
         String clientIp = ctx.channel().remoteAddress().toString();
         if (clientIp.startsWith("/")) clientIp = clientIp.substring(1);
-        ConnectionRecord record = new ConnectionRecord(clientIp, targetHost, targetPort, System.currentTimeMillis());
+        ConnectionRecord record = new ConnectionRecord(clientIp, targetHost, targetPort,
+                System.currentTimeMillis(), "SOCKS5");
         Socks5ProxyService.registerConnection(record);
 
         // 注册到全局管理器（提前注册，便于 ForwardHandler 查找）
