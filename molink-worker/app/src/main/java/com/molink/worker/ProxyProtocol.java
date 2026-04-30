@@ -2,7 +2,8 @@ package com.molink.worker;
 
 public enum ProxyProtocol {
     SOCKS5("SOCKS5"),
-    HTTP("HTTP");
+    HTTP("HTTP"),
+    MIX("MIX");
 
     private final String displayName;
 
@@ -13,7 +14,8 @@ public enum ProxyProtocol {
     public String getDisplayName() { return displayName; }
 
     public static ProxyProtocol fromString(String value) {
+        if ("socks5".equalsIgnoreCase(value)) return SOCKS5;
         if ("http".equalsIgnoreCase(value)) return HTTP;
-        return SOCKS5;
+        return MIX;
     }
 }

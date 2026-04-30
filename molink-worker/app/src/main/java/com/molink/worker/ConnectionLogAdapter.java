@@ -76,6 +76,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
     static class ViewHolder extends RecyclerView.ViewHolder {
         private final View dot;
         private final TextView targetHost;
+        private final TextView protocol;
         private final TextView traffic;
         private final TextView duration;
 
@@ -83,12 +84,20 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
             super(itemView);
             dot = itemView.findViewById(R.id.connDot);
             targetHost = itemView.findViewById(R.id.connTargetHost);
+            protocol = itemView.findViewById(R.id.connProtocol);
             traffic = itemView.findViewById(R.id.connTraffic);
             duration = itemView.findViewById(R.id.connDuration);
         }
 
         void bind(ConnectionRecord record) {
             targetHost.setText(record.getDisplayHost());
+
+            protocol.setText(record.protocol);
+            if ("SOCKS5".equals(record.protocol)) {
+                protocol.setBackgroundColor(0xFF2196F3);
+            } else {
+                protocol.setBackgroundColor(0xFFE91E63);
+            }
 
             // bytesDown = c->s = 用户上传 = ↑ ; bytesUp = s->c = 用户下载 = ↓
             long up = record.getBytesDown();

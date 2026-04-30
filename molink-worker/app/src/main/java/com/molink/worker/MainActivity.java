@@ -30,7 +30,7 @@ public class MainActivity extends Activity {
     private RadioGroup protocolRadioGroup;
     private RadioButton socks5Radio;
     private RadioButton httpRadio;
-    private boolean isSwitching = false;
+    private RadioButton mixRadio;
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
@@ -80,31 +80,29 @@ public class MainActivity extends Activity {
         protocolRadioGroup = findViewById(R.id.protocolRadioGroup);
         socks5Radio = findViewById(R.id.socks5Radio);
         httpRadio = findViewById(R.id.httpRadio);
+        mixRadio = findViewById(R.id.mixRadio);
 
-        // 协议切换监听：停止旧服务 → 启动新协议服务 → 轮询自动同步 UI
+        // 协议切换：仅修改 proxyType 字段，不重启服务（新连接自动生效）
         protocolRadioGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            if (isSwitching) return;
-            String newType = checkedId == R.id.socks5Radio ? "socks5" : "http";
             Socks5ProxyService svc = Socks5ProxyService.getInstance();
-
-            isSwitching = true;
-            socks5Radio.setEnabled(false);
-            httpRadio.setEnabled(false);
+            ProxyProtocol newType;
+            if (checkedId == R.id.socks5Radio) {
+                newType = ProxyProtocol.SOCKS5;
+            } else if (checkedId == R.id.httpRadio) {
+                newType = ProxyProtocol.HTTP;
+            } else {
+                newType = ProxyProtocol.MIX;
+            }
 
             if (svc != null && svc.isRunning()) {
-                stopService(new Intent(this, Socks5ProxyService.class));
-                Intent newIntent = new Intent(this, Socks5ProxyService.class);
-                newIntent.putExtra("proxy_type", newType);
-                uiHandler.postDelayed(() -> {
-                    startService(newIntent);
-                }, 500);
-            } else {
-                Intent newIntent = new Intent(this, Socks5ProxyService.class);
-                newIntent.putExtra("proxy_type", newType);
-                startService(newIntent);
+                svc.setProxyType(newType);
             }
-            uiHandler.removeCallbacks(uiPoller);
-            uiHandler.postDelayed(uiPoller, 2000);
+
+            if (svc != null && svc.isRunning()) {
+                showRunning(svc);
+            } else {
+                showStopped();
+            }
         });
     }
 
@@ -137,16 +135,23 @@ public class MainActivity extends Activity {
     }
 
     private String getCurrentProxyTypeString() {
-        if (protocolRadioGroup.getCheckedRadioButtonId() == R.id.httpRadio) {
-            return "http";
-        }
+        int checkedId = protocolRadioGroup.getCheckedRadioButtonId();
+        if (checkedId == R.id.httpRadio) return "http";
+        if (checkedId == R.id.mixRadio) return "mix";
         return "socks5";
+    }
+
+    private ProxyProtocol getProxyTypeFromRadio() {
+        int checkedId = protocolRadioGroup.getCheckedRadioButtonId();
+        if (checkedId == R.id.httpRadio) return ProxyProtocol.HTTP;
+        if (checkedId == R.id.mixRadio) return ProxyProtocol.MIX;
+        return ProxyProtocol.SOCKS5;
     }
 
     private void showStopped() {
         toggleButton.setText("启动服务");
-        String protocol = getCurrentProxyTypeString();
-        statusRunning.setText(("http".equals(protocol) ? "HTTP" : "SOCKS5") + " 服务已停止");
+        ProxyProtocol proto = getProxyTypeFromRadio();
+        statusRunning.setText(proto.getDisplayName() + " 服务已停止");
         statusDot.setBackgroundResource(R.drawable.circle_gray);
         statusPort.setVisibility(View.GONE);
         statusUptime.setVisibility(View.GONE);
@@ -155,15 +160,11 @@ public class MainActivity extends Activity {
         bytesDown.setText("--");
         bytesUp.setText("--");
         logAdapter.refreshAll(java.util.Collections.emptyList());
-        socks5Radio.setEnabled(true);
-        httpRadio.setEnabled(true);
-        isSwitching = false;
     }
 
     private void showRunning(Socks5ProxyService svc) {
         toggleButton.setText("停止服务");
-        ProxyProtocol proto = svc != null ? svc.getProxyType() :
-                ("http".equals(getCurrentProxyTypeString()) ? ProxyProtocol.HTTP : ProxyProtocol.SOCKS5);
+        ProxyProtocol proto = svc != null ? svc.getProxyType() : getProxyTypeFromRadio();
         statusRunning.setText(proto.getDisplayName() + " 运行中");
         statusDot.setBackgroundResource(R.drawable.circle_green);
         statusPort.setVisibility(View.VISIBLE);
@@ -173,11 +174,14 @@ public class MainActivity extends Activity {
             statusUptime.setText("在线:" + formatUptime(svc.getUptime()));
             connCount.setText(String.valueOf(svc.getConnectionCount()));
             // 根据实际协议同步 RadioGroup 选中状态
-            protocolRadioGroup.check(svc.getProxyType() == ProxyProtocol.HTTP ? R.id.httpRadio : R.id.socks5Radio);
+            if (svc.getProxyType() == ProxyProtocol.HTTP) {
+                protocolRadioGroup.check(R.id.httpRadio);
+            } else if (svc.getProxyType() == ProxyProtocol.MIX) {
+                protocolRadioGroup.check(R.id.mixRadio);
+            } else {
+                protocolRadioGroup.check(R.id.socks5Radio);
+            }
         }
-        socks5Radio.setEnabled(true);
-        httpRadio.setEnabled(true);
-        isSwitching = false;
     }
 
     private String formatBytes(long bytes) {
