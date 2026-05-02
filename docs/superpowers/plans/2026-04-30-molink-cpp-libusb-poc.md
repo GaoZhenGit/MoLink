@@ -987,36 +987,79 @@ adb.exe 的 A_CNXN data_length=234 正好等于 banner 字符串长度，不包�
 | 序列号获取 | ✅ | libusb_get_string_descriptor_ascii |
 | ADB A_CNXN 发送 | ✅ | header/data 分开传输，字节求和校验 |
 | 接收 A_AUTH TOKEN | ✅ | 设备正常返回 20 字节 token |
-| RSA 签名 | ✅ | NCryptSignHash (SHA1 + PKCS#1 v1.5) |
+| RSA 签名 | ✅ | 手动 PKCS#1 v1.5 填充 + BCryptDecrypt 裸 RSA |
 | 发送 AUTH_SIGNATURE | ✅ | 字节求和校验 |
-| PKCS#8 密钥导入 | ✅ | adbkey PEM → NCryptImportKey |
-| 公钥导出 | ✅ | Android 格式 272 字节 (name + exp + mod) |
+| AUTH_RSAPUBLICKEY | ✅ | base64(RSAPublicKey 524B) + " " + user@host + null |
+| 设备授权弹窗 | ✅ | 用户点击"允许"后设备响应 CNXN |
+| 打开 TCP 通道 | ✅ | A_OPEN → 设备返回 CLSE（worker 未启动，预期行为） |
+
+### 关键发现 (2026-05-02 补充)
+
+#### 4. AUTH_RSAPUBLICKEY 格式：base64 文本，非原始二进制
+
+adb.exe 的 AUTH_RSAPUBLICKEY 数据格式（720 字节）：
+```
+base64_encode(RSAPublicKey 结构体 524 字节) + " " + user@host + '\0'
+```
+**没有 4 字节长度前缀！** 原始实现错误地加了 LE 长度前缀 + 原始二进制公钥。
+
+RSAPublicKey 结构体（524 字节）：
+```
+uint32_t key_size;   // 64 (2048-bit key 的 32-bit word 数)
+uint32_t n0inv;      // -1/n[0] mod 2^32 (Montgomery 逆)
+uint32_t modulus[64]; // n 的 64 个 LE uint32 words
+uint32_t rr[64];     // R^2 mod n = 2^4096 mod n (Montgomery R^2)
+uint32_t exponent;   // 公钥指数 (LE uint32)
+```
+
+- `n0inv` 计算：Newton 迭代法求模 2^32 逆元，再取负
+- `rr` 计算：2^4096 mod n，通过 2048 次「加倍 + 条件减 n」实现
+- 通过 adbkey.pub 的已知数据验证：n0*n0inv ≡ -1 (mod 2^32) ✅
+
+#### 5. NCryptSignHash 产生错误签名
+
+Windows NCryptSignHash 产生的 PKCS#1 v1.5 签名与 OpenSSL/BoringSSL 不一致，导致设备验证失败。
+
+**解决方案**：手动构建 PKCS#1 v1.5 填充块（0x00 0x01 0xFF...0x00 + SHA-1 DigestInfo），然后用 `BCryptDecrypt` + `BCRYPT_PAD_NONE` 做裸 RSA 私钥操作得到签名。
+
+SHA-1 DigestInfo 前缀：
+```
+30 21 30 09 06 05 2B 0E 03 02 1A 05 00 04 14
+```
+
+#### 6. 设备授权流程
+
+握手完整流程：
+```
+A_CNXN → A_AUTH(TOKEN) → AUTH_SIGNATURE → A_AUTH(TOKEN, 要公钥)
+→ AUTH_RSAPUBLICKEY → (设备弹授权对话框，用户点允许) → A_CNXN(成功!)
+```
+
+设备会弹出「允许 USB 调试」对话框，用户授权后立即响应 A_CNXN，连接成功。
 
 ### 待解决 ⏳
 
 | 步骤 | 状态 | 备注 |
 |------|------|------|
-| AUTH_RSAPUBLICKEY | ❌ | 设备不响应（120s 超时），可能不支持动态公钥注册 |
-| BCryptImportKeyPair | ❌ | 手动构造的 CNG blob 被拒 (STATUS_INVALID_PARAMETER)，改用 NCrypt 绕过 |
+| adbkey 复用 | ⏳ | NCryptSignHash 签名错误，需改为手动 PKCS#1 或用 BCrypt 密钥 |
+| 自动重连 | ⏳ | 连接断开后自动恢复，需实现 |
 
-### 当前握手流程
+### 当前状态总结
 
-```
-A_CNXN(字节和=0x5B44) → A_AUTH(TOKEN) → AUTH_SIGNATURE(字节和) → A_AUTH(重新请求公钥) → AUTH_RSAPUBLICKEY → 超时
-```
+POC 所有核心目标已达成。使用 BCrypt 生成新密钥 + 手动 PKCS#1 v1.5 签名 + 自建 RSAPublicKey 结构体的方案完全可行。遗留问题是让 adb 已有密钥（adbkey）也能工作——需要解决 NCryptSignHash 签名不一致的问题，或者从 PKCS#8 中提取完整 RSA 参数后用 BCryptImportKeyPair 导入。
 
 ### 新增/修改文件
 
 | 文件 | 变更 |
 |------|------|
 | `src/adb/adb_transport.h` | A_VERSION → 0x01000001, MAX_PAYLOAD_V2 → 1MB, checksum() 替换 crc32() |
-| `src/adb/adb_transport.cpp` | send() header/data 分开写; handshake() 字节求和; 移除 crc32() |
+| `src/adb/adb_transport.cpp` | send() header/data 分开写; handshake() 先 SIGNATURE 再 RSAPUBLICKEY; 移除 crc32() |
 | `src/usb/usb_device.h` | 新增 clearHalt(), drainRead() |
-| `src/usb/usb_device.cpp` | clearHalt()/drainRead() 实现; open() 移除 libusb_reset_device, 改用 detach_kernel_driver |
-| `src/adb/adb_rsa.h` | 新增 loadPkcs8(), m_isNcrypt, m_cachedModulus/Exp |
-| `src/adb/adb_rsa.cpp` | loadPkcs8() PKCS#8 DER 解析 + NCryptImportKey; signToken() 使用 NCryptSignHash; getPublicKey() 支持 NCrypt 缓存公钥; 析构函数 NCryptFreeObject |
-| `src/poc_main.cpp` | clearHalt+drainRead 流程; loadPkcs8() 回退; fullBanner 复用 |
-| `CMakeLists.txt` | 移除硬编码工具路径; 新增 ncrypt, crypt32 链接 |
+| `src/usb/usb_device.cpp` | clearHalt()/drainRead() 实现; open() detach_kernel_driver |
+| `src/adb/adb_rsa.h` | 新增 getPubKeyPayload(), base64Encode(), buildRsaPublicKey(), readAdbPubKey() |
+| `src/adb/adb_rsa.cpp` | **手动 PKCS#1 v1.5 签名** (BCryptDecrypt + BCRYPT_PAD_NONE); **RSAPublicKey 构建** (n0inv + rr 计算); base64Encode(); 读取 adbkey.pub; loadPkcs8() 移除 NCRYPT_DO_NOT_FINALIZE_FLAG |
+| `src/poc_main.cpp` | BCrypt 生成密钥 (绕过 NCrypt 签名问题); fullBanner |
+| `CMakeLists.txt` | 移除硬编码工具路径; 新增 bcrypt, ncrypt, crypt32 |
 
 ### 编译
 

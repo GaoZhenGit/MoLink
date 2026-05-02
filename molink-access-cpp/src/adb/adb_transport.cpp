@@ -183,26 +183,20 @@ bool AdbTransport::handshake(AdbRsa& rsa, const std::string& banner) {
 
         if (msg.command == A_AUTH && msg.arg0 == AUTH_TOKEN) {
             if (waiting_for_authorization) {
+                // 第二轮 TOKEN: 发送公钥
                 printf("ADB: Device requested public key\n");
-                auto pubkey = rsa.getPublicKey();
-                if (pubkey.empty()) {
-                    printf("FAIL: Cannot get public key\n");
+                std::string payload = rsa.getPubKeyPayload();
+                if (payload.empty()) {
+                    printf("FAIL: Cannot get public key payload\n");
                     return false;
                 }
-                uint32_t keyLen = (uint32_t)pubkey.size();
-                std::vector<uint8_t> payload(4 + pubkey.size());
-                payload[0] = keyLen & 0xFF;
-                payload[1] = (keyLen >> 8) & 0xFF;
-                payload[2] = (keyLen >> 16) & 0xFF;
-                payload[3] = (keyLen >> 24) & 0xFF;
-                memcpy(payload.data() + 4, pubkey.data(), pubkey.size());
                 if (!send(A_AUTH, AUTH_RSAPUBLICKEY, 0, payload.data(), (uint32_t)payload.size())) {
                     printf("FAIL: send AUTH_RSAPUBLICKEY\n");
                     return false;
                 }
-                printf("ADB: Public key sent (key=%u bytes)\n", keyLen);
-                waiting_for_authorization = true;
+                printf("ADB: Public key sent (%zu bytes, round %d)\n", payload.size(), round);
             } else {
+                // 第一轮 TOKEN: 签名
                 printf("ADB: Signing token (%u bytes)...\n", (uint32_t)data.size());
                 auto sig = rsa.signToken(data.data(), data.size());
                 if (sig.empty()) {

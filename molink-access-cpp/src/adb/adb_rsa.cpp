@@ -34,6 +34,9 @@ bool AdbRsa::generateKey() {
         BCryptDestroyKey(m_key);
         m_key = nullptr;
     }
+    m_isNcrypt = false;
+    m_cachedModulus.clear();
+    m_cachedExp.clear();
 
     NTSTATUS status = BCryptOpenAlgorithmProvider(&m_alg, BCRYPT_RSA_ALGORITHM, nullptr, 0);
     if (status != 0) {
@@ -59,7 +62,31 @@ bool AdbRsa::generateKey() {
         return false;
     }
 
-    printf("RSA: 2048-bit key pair generated\n");
+    // 导出公钥参数到缓存，供 buildRsaPublicKey() 使用
+    ULONG blobSize = 0;
+    status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                              nullptr, 0, &blobSize, 0);
+    if (status == 0 && blobSize > 0) {
+        std::vector<uint8_t> blob(blobSize);
+        status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                                  blob.data(), blobSize, &blobSize, 0);
+        if (status == 0) {
+            BCRYPT_RSAKEY_BLOB* header = (BCRYPT_RSAKEY_BLOB*)blob.data();
+            uint8_t* keyData = blob.data() + sizeof(BCRYPT_RSAKEY_BLOB);
+            m_cachedExp.assign(keyData, keyData + header->cbPublicExp);
+            m_cachedModulus.assign(keyData + header->cbPublicExp,
+                                    keyData + header->cbPublicExp + header->cbModulus);
+            // 补齐 exponent 到 4 字节
+            while (m_cachedExp.size() < 4) m_cachedExp.insert(m_cachedExp.begin(), 0);
+            // 去掉 modulus 前导零
+            while (!m_cachedModulus.empty() && m_cachedModulus[0] == 0)
+                m_cachedModulus.erase(m_cachedModulus.begin());
+            printf("RSA: Cached n=%zu bytes, e=%zu bytes from BCrypt\n",
+                   m_cachedModulus.size(), m_cachedExp.size());
+        }
+    }
+
+    printf("RSA: 2048-bit key pair generated (BCrypt)\n");
     return true;
 }
 
@@ -178,30 +205,14 @@ bool AdbRsa::loadPkcs8(const std::string& path) {
 
     NCRYPT_KEY_HANDLE ncKey = 0;
     ss = NCryptImportKey(prov, 0, NCRYPT_PKCS8_PRIVATE_KEY_BLOB, nullptr,
-                          &ncKey, der.data(), derLen, NCRYPT_DO_NOT_FINALIZE_FLAG);
+                          &ncKey, der.data(), derLen, 0);
     if (ss != 0) {
         printf("RSA: NCryptImportKey failed: 0x%08X\n", (unsigned)ss);
         NCryptFreeObject(prov);
         return false;
     }
 
-    // 设置 SHA1 签名算法（使用已知常量值）
-    // NCRYPT_SIGNATURE_HASH_ALGORITHM_PROPERTY = L"Signature Hash Algorithm"
-    #ifndef NCRYPT_SIGNATURE_HASH_ALGORITHM_PROPERTY
-    #define NCRYPT_SIGNATURE_HASH_ALGORITHM_PROPERTY L"Signature Hash Algorithm"
-    #endif
-    ss = NCryptSetProperty(ncKey, NCRYPT_SIGNATURE_HASH_ALGORITHM_PROPERTY,
-                            (PBYTE)NCRYPT_SHA1_ALGORITHM,
-                            (DWORD)(wcslen(NCRYPT_SHA1_ALGORITHM) + 1) * sizeof(WCHAR), 0);
-
-    // Finalize key
-    ss = NCryptFinalizeKey(ncKey, 0);
-    if (ss != 0) {
-        printf("RSA: NCryptFinalizeKey failed: 0x%08X\n", (unsigned)ss);
-        NCryptFreeObject(ncKey);
-        NCryptFreeObject(prov);
-        return false;
-    }
+    printf("RSA: NCryptImportKey OK (with finalize)\n");
 
     // 缓存公钥参数（NCrypt 导入的密钥不支持 BCryptExportKey）
     // 从已解析的 DER 中提取 n 和 e
@@ -297,51 +308,68 @@ std::vector<uint8_t> AdbRsa::signToken(const uint8_t* token, size_t token_len) {
         return {};
     }
 
-    // SHA1(token)
     auto hash = sha1(token, token_len);
 
-    // Try NCryptSignHash first (for PKCS#8 imported keys), fall back to BCryptSignHash
-    BCRYPT_PKCS1_PADDING_INFO paddingInfo;
-    paddingInfo.pszAlgId = NCRYPT_SHA1_ALGORITHM;
+    if (m_isNcrypt) {
+        // NCrypt 导入的密钥：使用 NCryptSignHash
+        BCRYPT_PKCS1_PADDING_INFO paddingInfo;
+        paddingInfo.pszAlgId = NCRYPT_SHA1_ALGORITHM;
 
-    ULONG sigSize = 0;
-    // 注意: NCryptSignHash 在 Win10+ 上接受 BCRYPT_PAD_PKCS1 即使对 finalized keys
-    SECURITY_STATUS status = NCryptSignHash((NCRYPT_KEY_HANDLE)m_key, &paddingInfo,
-                                             hash.data(), (ULONG)hash.size(),
-                                             nullptr, 0, &sigSize,
-                                             BCRYPT_PAD_PKCS1);
-    if (status != 0) {
-        // Fall back to BCryptSignHash
-        paddingInfo.pszAlgId = BCRYPT_SHA1_ALGORITHM;
-        status = BCryptSignHash(m_key, &paddingInfo,
-                                 hash.data(), (ULONG)hash.size(),
-                                 nullptr, 0, &sigSize,
-                                 BCRYPT_PAD_PKCS1);
+        ULONG sigSize = 0;
+        SECURITY_STATUS status = NCryptSignHash((NCRYPT_KEY_HANDLE)m_key, &paddingInfo,
+                                                 hash.data(), (ULONG)hash.size(),
+                                                 nullptr, 0, &sigSize,
+                                                 BCRYPT_PAD_PKCS1);
         if (status != 0) {
-            printf("RSA: SignHash size query failed: 0x%08X\n", (unsigned)status);
+            printf("RSA: NCryptSignHash size query failed: 0x%08X\n", (unsigned)status);
             return {};
         }
-    }
 
-    std::vector<uint8_t> sig(sigSize);
-    status = NCryptSignHash((NCRYPT_KEY_HANDLE)m_key, &paddingInfo,
-                             hash.data(), (ULONG)hash.size(),
-                             sig.data(), sigSize, &sigSize,
-                             BCRYPT_PAD_PKCS1);
-    if (status != 0) {
-        // Fall back to BCryptSignHash
-        paddingInfo.pszAlgId = BCRYPT_SHA1_ALGORITHM;
-        status = BCryptSignHash(m_key, &paddingInfo,
+        std::vector<uint8_t> sig(sigSize);
+        status = NCryptSignHash((NCRYPT_KEY_HANDLE)m_key, &paddingInfo,
                                  hash.data(), (ULONG)hash.size(),
                                  sig.data(), sigSize, &sigSize,
                                  BCRYPT_PAD_PKCS1);
         if (status != 0) {
-            printf("RSA: SignHash failed: 0x%08X\n", (unsigned)status);
+            printf("RSA: NCryptSignHash failed: 0x%08X\n", (unsigned)status);
             return {};
         }
+        printf("RSA: NCrypt signed token -> signature (%lu bytes)\n", sigSize);
+        return sig;
     }
 
-    printf("RSA: Signed token (%zu bytes) -> signature (%lu bytes)\n", token_len, sigSize);
+    // BCrypt 生成的密钥：手动 PKCS#1 v1.5 填充 + 裸 RSA
+    // SHA-1 DigestInfo prefix: 30 21 30 09 06 05 2B 0E 03 02 1A 05 00 04 14
+    const uint8_t sha1_di[] = {
+        0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E,
+        0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14
+    };
+    const size_t di_len = sizeof(sha1_di);  // 15
+    const size_t key_bytes = 256;  // 2048-bit RSA
+
+    // EM = 0x00 || 0x01 || PS || 0x00 || T
+    // PS = 0xFF * (key_bytes - 3 - di_len - hash.size())
+    size_t ps_len = key_bytes - 3 - di_len - hash.size();
+    std::vector<uint8_t> padded(key_bytes, 0xFF);
+    padded[0] = 0x00;
+    padded[1] = 0x01;
+    padded[2 + ps_len] = 0x00;
+    memcpy(&padded[2 + ps_len + 1], sha1_di, di_len);
+    memcpy(&padded[2 + ps_len + 1 + di_len], hash.data(), hash.size());
+
+    // 裸 RSA 私钥操作: sig = padded ^ d mod n
+    ULONG sigSize = key_bytes;
+    std::vector<uint8_t> sig(key_bytes);
+    NTSTATUS status = BCryptDecrypt(m_key, padded.data(), (ULONG)padded.size(),
+                                     nullptr, nullptr, 0,
+                                     sig.data(), sigSize, &sigSize,
+                                     BCRYPT_PAD_NONE);
+    if (status != 0) {
+        printf("RSA: BCryptDecrypt (raw sign) failed: 0x%08X\n", (unsigned)status);
+        return {};
+    }
+
+    printf("RSA: Manual PKCS#1 signed token -> signature (%lu bytes)\n", sigSize);
     return sig;
 }
 
@@ -487,4 +515,240 @@ std::vector<uint8_t> AdbRsa::sha1(const uint8_t* data, size_t len) {
         hash[j * 4 + 3] = state[j] & 0xFF;
     }
     return hash;
+}
+
+// ---- RSAPublicKey 结构构建 ----
+
+// 模逆 n0inv = -modinv(n0, 2^32)
+static uint32_t modinv32(uint32_t a) {
+    // a 必须是奇数（RSA 模数的低 32 位总是奇数）
+    uint32_t x = 1;
+    // Newton 迭代: x = x * (2 - a * x) mod 2^32
+    for (int i = 0; i < 5; i++)
+        x = x * (2 - a * x);
+    return (uint32_t)(-(int32_t)x);
+}
+
+std::vector<uint8_t> AdbRsa::buildRsaPublicKey() {
+    if (m_cachedModulus.size() < 256 || m_cachedExp.size() < 4) {
+        printf("RSA: No cached key params for RSAPublicKey\n");
+        return {};
+    }
+
+    // 1. 从 BE 字节转为 LE uint32 limbs
+    std::vector<uint32_t> n_limbs(64, 0);
+    for (int i = 0; i < 64; i++) {
+        int be_idx = 255 - (i * 4 + 3);  // limb[i] 的 MSB 在 BE 的位置
+        n_limbs[i] = ((uint32_t)m_cachedModulus[be_idx + 3]) |
+                     ((uint32_t)m_cachedModulus[be_idx + 2] << 8) |
+                     ((uint32_t)m_cachedModulus[be_idx + 1] << 16) |
+                     ((uint32_t)m_cachedModulus[be_idx] << 24);
+    }
+
+    uint32_t n0 = n_limbs[0];
+    uint32_t n0inv = modinv32(n0);
+
+    // 2. 计算 rr = 2^4096 mod n
+    //    使用重复加倍 + 条件减法
+    std::vector<uint32_t> r(66, 0);  // 最多需要 66 个 limb
+    r[64] = 1;  // 2^2048 (bit 2048 = limb 64 bit 0)
+
+    // r = 2^2048 - n
+    {
+        uint64_t borrow = 0;
+        for (int i = 0; i < 64; i++) {
+            uint64_t sub = (uint64_t)n_limbs[i] + borrow;
+            if (r[i] < sub) {
+                r[i] = (uint32_t)((r[i] + 0x100000000ULL) - sub);
+                borrow = 1;
+            } else {
+                r[i] = (uint32_t)(r[i] - sub);
+                borrow = 0;
+            }
+        }
+        if (borrow && r[64] > 0) r[64]--;
+    }
+
+    // 加倍 2048 次，每次 >= n 则减去 n
+    for (int iter = 0; iter < 2048; iter++) {
+        // r *= 2
+        uint32_t carry = 0;
+        for (size_t i = 0; i < r.size(); i++) {
+            uint64_t v = ((uint64_t)r[i] << 1) | carry;
+            r[i] = (uint32_t)v;
+            carry = (uint32_t)(v >> 32);
+        }
+
+        // 如果 r >= n，r -= n
+        // 简化：检查是否有进位，或最高 limb 比较
+        bool ge = (carry > 0);
+        if (!ge) {
+            // 比较 r[63..0] 和 n[63..0]
+            for (int i = 63; i >= 0; i--) {
+                if (r[i] > n_limbs[i]) { ge = true; break; }
+                if (r[i] < n_limbs[i]) break;
+                if (i == 0 && r[i] == n_limbs[i]) ge = true;
+            }
+        }
+        if (ge) {
+            uint64_t borrow = 0;
+            for (int i = 0; i < 64; i++) {
+                uint64_t sub = (uint64_t)n_limbs[i] + borrow;
+                if (r[i] < sub) {
+                    r[i] = (uint32_t)((r[i] + 0x100000000ULL) - sub);
+                    borrow = 1;
+                } else {
+                    r[i] = (uint32_t)(r[i] - sub);
+                    borrow = 0;
+                }
+            }
+            if (borrow && r[64] > 0) r[64]--;
+        }
+    }
+
+    // 3. 组装 RSAPublicKey (524 bytes)
+    std::vector<uint8_t> result(4 + 4 + 256 + 256 + 4, 0);
+    size_t off = 0;
+
+    // key_size (uint32 LE)
+    uint32_t key_size = 64;
+    memcpy(result.data() + off, &key_size, 4); off += 4;
+
+    // n0inv (uint32 LE)
+    memcpy(result.data() + off, &n0inv, 4); off += 4;
+
+    // modulus (256 bytes, LE from limbs)
+    for (int i = 0; i < 64; i++) {
+        memcpy(result.data() + off, &n_limbs[i], 4);
+        off += 4;
+    }
+
+    // rr (256 bytes, LE from limbs)
+    for (int i = 0; i < 64; i++) {
+        memcpy(result.data() + off, &r[i], 4);
+        off += 4;
+    }
+
+    // exponent (uint32 LE)
+    // m_cachedExp is BE, convert to LE
+    uint32_t exp = 0;
+    for (size_t i = 0; i < m_cachedExp.size(); i++)
+        exp |= ((uint32_t)m_cachedExp[m_cachedExp.size() - 1 - i]) << (i * 8);
+    memcpy(result.data() + off, &exp, 4); off += 4;
+
+    printf("RSA: RSAPublicKey built (%zu bytes, n0inv=0x%08X, exp=0x%X)\n",
+           result.size(), n0inv, exp);
+    return result;
+}
+
+std::string AdbRsa::base64Encode(const uint8_t* data, size_t len) {
+    DWORD b64Len = 0;
+    if (!CryptBinaryToStringA(data, (DWORD)len,
+                               CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+                               nullptr, &b64Len))
+        return {};
+
+    std::string result(b64Len, 0);
+    if (!CryptBinaryToStringA(data, (DWORD)len,
+                               CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+                               &result[0], &b64Len))
+        return {};
+
+    // 去除尾部的 null
+    while (!result.empty() && result.back() == 0)
+        result.pop_back();
+    return result;
+}
+
+bool AdbRsa::readAdbPubKey(std::string& out) {
+    char appdata[MAX_PATH] = {};
+    if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata) != S_OK)
+        return false;
+
+    std::string path = std::string(appdata) + "\\.android\\adbkey.pub";
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size <= 0 || size > 2048) {
+        fclose(f);
+        return false;
+    }
+
+    out.resize(size);
+    size_t read = fread(&out[0], 1, size, f);
+    fclose(f);
+
+    if (read != (size_t)size) return false;
+
+    // 去除末尾的换行符
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
+        out.pop_back();
+
+    printf("RSA: Read adbkey.pub (%zu chars)\n", out.size());
+    return true;
+}
+
+std::string AdbRsa::getPubKeyPayload() {
+    // 仅当使用 adb 的 NCrypt 密钥时才复用 .pub 文件
+    if (m_isNcrypt) {
+        std::string pubKeyStr;
+        if (readAdbPubKey(pubKeyStr)) {
+            pubKeyStr += '\0';
+            printf("RSA: Using adbkey.pub for AUTH_RSAPUBLICKEY (%zu bytes)\n", pubKeyStr.size());
+            return pubKeyStr;
+        }
+    }
+
+    // 没有 .pub 文件，自己构建 RSAPublicKey
+    if (!isReady()) {
+        printf("RSA: Key not ready, cannot build RSAPublicKey\n");
+        return {};
+    }
+
+    // 如果缓存为空（从旧文件加载的 BCrypt key），尝试导出公钥参数
+    if (m_cachedModulus.empty() && !m_isNcrypt) {
+        ULONG blobSize = 0;
+        NTSTATUS status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                                           nullptr, 0, &blobSize, 0);
+        if (status == 0 && blobSize > 0) {
+            std::vector<uint8_t> blob(blobSize);
+            status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                                      blob.data(), blobSize, &blobSize, 0);
+            if (status == 0) {
+                BCRYPT_RSAKEY_BLOB* header = (BCRYPT_RSAKEY_BLOB*)blob.data();
+                uint8_t* keyData = blob.data() + sizeof(BCRYPT_RSAKEY_BLOB);
+                m_cachedExp.assign(keyData, keyData + header->cbPublicExp);
+                m_cachedModulus.assign(keyData + header->cbPublicExp,
+                                        keyData + header->cbPublicExp + header->cbModulus);
+                while (m_cachedExp.size() < 4) m_cachedExp.insert(m_cachedExp.begin(), 0);
+                while (!m_cachedModulus.empty() && m_cachedModulus[0] == 0)
+                    m_cachedModulus.erase(m_cachedModulus.begin());
+                printf("RSA: Exported n=%zu bytes, e=%zu bytes from loaded key\n",
+                       m_cachedModulus.size(), m_cachedExp.size());
+            }
+        }
+    }
+
+    auto rsapk = buildRsaPublicKey();
+    if (rsapk.empty()) return {};
+
+    std::string b64 = base64Encode(rsapk.data(), rsapk.size());
+    if (b64.empty()) return {};
+
+    // 用户名
+    char user[256] = {};
+    DWORD userLen = sizeof(user);
+    GetUserNameA(user, &userLen);
+    char computer[256] = {};
+    DWORD compLen = sizeof(computer);
+    GetComputerNameA(computer, &compLen);
+
+    std::string result = b64 + " " + std::string(user) + "@" + std::string(computer);
+    result += '\0';
+    printf("RSA: Built AUTH_RSAPUBLICKEY payload (%zu bytes)\n", result.size());
+    return result;
 }

@@ -54,35 +54,18 @@ int main() {
         "sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send,"
         "openscreen_mdns";
 
-    // RSA key
+    // RSA key — BCrypt 生成 + 手动 PKCS#1 签名
     printf("\n--- Step 5: RSA Key ---\n");
     AdbRsa rsa;
     std::string keyPath = getKeyPath();
     if (!rsa.loadKey(keyPath)) {
-        // 尝试从 adbkey 导入（PKCS#8 PEM）
-        char appdata2[MAX_PATH] = {};
-        if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata2) == S_OK) {
-            std::string adbKeyPath = std::string(appdata2) + "\\.android\\adbkey";
-            if (rsa.loadPkcs8(adbKeyPath)) {
-                printf("RSA: Adb key imported successfully\n");
-            } else {
-                printf("Generating new RSA key pair...\n");
-                if (!rsa.generateKey()) {
-                    printf("FAIL: Cannot generate RSA key\n");
-                    dev.close();
-                    return 1;
-                }
-                rsa.saveKey(keyPath);
-            }
-        } else {
-            printf("Generating new RSA key pair...\n");
-            if (!rsa.generateKey()) {
-                printf("FAIL: Cannot generate RSA key\n");
-                dev.close();
-                return 1;
-            }
-            rsa.saveKey(keyPath);
+        printf("Generating new RSA key pair (BCrypt)...\n");
+        if (!rsa.generateKey()) {
+            printf("FAIL: Cannot generate RSA key\n");
+            dev.close();
+            return 1;
         }
+        rsa.saveKey(keyPath);
     }
 
     // 6. RSA handshake
