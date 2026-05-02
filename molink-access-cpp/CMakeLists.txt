@@ -4,14 +4,7 @@ project(molink LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 64-bit MinGW
-set(CMAKE_C_COMPILER "D:/software/w64devkit/x64/bin/gcc.exe")
-set(CMAKE_CXX_COMPILER "D:/software/w64devkit/x64/bin/g++.exe")
-
-# 指定 compiler 工具链路径（as/ld 等），防止找到 x86 的版本
-set(TOOLCHAIN_PREFIX "D:/software/w64devkit/x64/bin")
-set(CMAKE_C_FLAGS "-B${TOOLCHAIN_PREFIX}")
-set(CMAKE_CXX_FLAGS "-B${TOOLCHAIN_PREFIX}")
+# 64-bit MinGW — 工具已加入 PATH，由 CMake 自动检测
 
 set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
 
@@ -25,7 +18,7 @@ add_executable(molink
     src/adb/adb_rsa.cpp
 )
 
-target_link_libraries(molink libusb-1.0.dll.a ws2_32 bcrypt)
+target_link_libraries(molink libusb-1.0.dll.a ws2_32 bcrypt ncrypt crypt32)
 
 # 构建后复制 libusb DLL 到输出目录
 add_custom_command(TARGET molink POST_BUILD

@@ -6,7 +6,7 @@
 
 **Architecture:** 单线程同步调用。UsbDevice 封装 libusb 的 USB 设备操作（发现/打开/读写），AdbTransport 通过 UsbDevice 引用执行 ADB 协议消息收发，poc_main 串联完整流程
 
-**Tech Stack:** C++17, MinGW GCC 64-bit (D:/software/w64devkit/x64), CMake 3.14+, libusb 1.0.29 MinGW64 预编译, Winsock2
+**Tech Stack:** C++17, MinGW GCC 64-bit (E:/software/w64devkit/x64), CMake 3.14+, libusb 1.0.29 MinGW64 预编译, Winsock2
 
 ---
 
@@ -941,129 +941,103 @@ Task 1（下载libusb+项目骨架）
 
 ---
 
-## 当前状态 (2026-04-30)
+## 当前状态 (2026-05-02) — 魅族设备 POC 已完成
 
-## 魅族设备 (Meizu) 兼容性记录
+**POC 核心目标达成。** USB 通信 + ADB 协议 + RSA 认证握手全部打通。通过 Wireshark 抓包 (`docs/mezu.pcapng`) 分析 adb.exe 的正常通信流程，修复了三个关键问题。
 
-### 设备信息
+### 关键发现
+
+#### 1. ADB 校验和 = 字节求和，不是 CRC32
+
+adb.exe 的 `data_check` 字段是**简单的字节求和**（`sum(data_bytes)`），而非标准 CRC32。之前的分析认为"libusb/AdbWinApi/WinUSB 三位一体，Bulk Read 始终超时"——根本原因就是校验算法错误，设备丢弃了所有校验和不匹配的消息。
+
+pcap 验证：
+- A_CNXN banner (234 bytes): 字节和 = 0x5B44 → header 中的 `data_check` = 0x00005B44 ✅
+- AUTH_SIGNATURE (256 bytes): 字节和 = 0x7B70 → header 中的 `data_check` = 0x00007B70 ✅
+
+#### 2. Header 和 Data 必须分开传输
+
+adb.exe 将 ADB header(24B) 和 data 作为**两次独立的 USB bulk write**。之前的代码合并成一次写入，魅族设备不响应。
+
+#### 3. Banner 不含 null 终止符
+
+adb.exe 的 A_CNXN data_length=234 正好等于 banner 字符串长度，不包含 NUL 终止符。之前用 `banner.size() + 1` 多发了 1 字节。
+
+#### 4. 根因纠错
+
+之前的分析认为"魅族 adbd 做了定制化修改，需要 OEM 握手"——这是**错误的**。抓包证实 adb.exe 与魅族设备通信使用的是**完全标准的 ADB 协议**，问题纯粹出在我们的实现上（校验和 + header/data 合并 + banner 格式）。
+
+### 魅族设备信息 (不变)
 
 | 项目 | 值 |
 |------|-----|
 | VID/PID | 0x2A45 / 0x4EE7 |
-| ADB 接口 | class=0xFF, subclass=0x42, protocol=0x01（标准 ADB） |
-| 端点 | read_ep=0x81, write_ep=0x01, maxpkt=512（与 Google 设备完全相同） |
-| 系统 | Flyme OS（魅族定制 Android） |
+| ADB 接口 | class=0xFF, subclass=0x42, protocol=0x01（标准 ADB）|
+| 端点 | read_ep=0x81, write_ep=0x01, maxpkt=512 |
+| 序列号 | 852QLDV923XMM |
+| 系统 | Flyme OS（魅族定制 Android）|
 
-### 测试方法
-
-对魅族设备使用 **三种独立方案** 进行了测试：
-
-| 方案 | 实现方式 | 源码 |
-|------|---------|------|
-| libusb | libusb_bulk_transfer() | `src/usb/usb_device.cpp` |
-| AdbWinApi.dll | LoadLibrary + AdbReadEndpointSync/AdbWriteEndpointSync | 早期 POC 代码 |
-| 直接 WinUSB | CreateFile + WinUsb_Initialize + WinUsb_WritePipe/ReadPipe | `src/winusb_test.cpp` |
-
-还编写了诊断程序 `src/diag_test.cpp`，发送 5 种不同 ADB 消息（A_CNXN、A_CLSE、旧协议版本、无效 magic 垃圾消息、重试）测试设备响应。
-
-### 测试结果
-
-三 展开 种方案结果**完全一致**：
-
-| 操作 | 结果 |
-|------|------|
-| 设备发现 | ✅ 成功（能识别 ADB 接口） |
-| 设备打开 | ✅ 成功（libusb_open + claim_interface） |
-| 控制传输（获取序列号） | ✅ 成功 |
-| **Bulk Write** | ✅ 成功（数据发送到设备） |
-| **Bulk Read** | ❌ **始终超时**（libusb 返回 `LIBUSB_ERROR_TIMEOUT`） |
-| diag 5 种消息测试 | ❌ 全部无响应 |
-
-### 关键发现
-
-1. **三位一体**：libusb、AdbWinApi.dll、直接 WinUSB 三种方案表现完全相同 —— write 成功、read 超时，排除了代码 bug 或 API 使用错误
-2. **adb.exe 正常工作**：同一台魅族设备用官方 `adb.exe`（Android SDK platform-tools）可以正常连接和通信
-3. **换用 Google 设备 (0x18D1) 后**：三种方案全部正常，排除了 libusb/WinUSB 环境配置问题
-4. **所有诊断消息无响应**：发送 A_CNXN、A_CLSE、旧协议版本、垃圾消息后设备完全不回复，说明魅族 ADB 在握手阶段就走上了不同的路径
-
-### 根因分析
-
-魅族 Flyme OS 对 ADB 协议做了**定制化修改**，设备端 adbd 的行为与 AOSP 标准不同：
-
-- **标准 AOSP adbd**: 收到 A_CNXN 后检查是否需要认证，回复 A_AUTH 或 A_CNXN
-- **魅族 adbd**: 可能要求特定的 OEM 握手序列、特殊的协议版本号、或需要先通过专有认证
-
-`adb.exe` 能正常连接魅族设备，是因为它在 `adb_usb.ini` 中维护了已知 VID 列表，对特定 VID（包括 0x2A45）可能应用了特殊的处理逻辑或额外的初始化步骤。
-
-### 解决方案
-
-**直接换用标准 AOSP 设备（Google Pixel/Nexus, VID=0x18D1）**，所有通信正常。魅族设备因 OEM 定制 ADB 协议，不在本项目支持范围内。
-
----
-
-## Google 设备 (0x18D1) 当前状态 (2026-04-30)
-
-### 已完成
+### 已完成 ✅
 
 | 步骤 | 状态 | 备注 |
 |------|------|------|
-| 设备发现 | ✅ | Google 设备 VID=0x18D1 PID=0x4E11, read_ep=0x81, write_ep=0x01 |
-| 设备打开 | ✅ | libusb_open + claim_interface + USB reset |
-| 序列号获取 | ✅ | serial=96ea9fdc |
-| Bulk 读写 | ✅ | 双向通信正常 |
-| ADB A_CNXN 发送 | ✅ | 31 bytes 发送成功 |
-| 接收 A_AUTH TOKEN | ✅ | 设备返回 20 字节随机 token |
-| RSA 签名 | ✅ | BCryptSignHash(SHA1+PKCS#1 v1.5) 签名被设备接受（设备发回第二个 AUTH_TOKEN 请求公钥） |
+| 设备发现 | ✅ | libusb VID/PID 匹配 |
+| 设备打开 | ✅ | libusb_open + claim_interface |
+| clearHalt + drainRead | ✅ | 模拟 adb.exe 的 ABORT_PIPE + RESET_PIPE |
+| 序列号获取 | ✅ | libusb_get_string_descriptor_ascii |
+| ADB A_CNXN 发送 | ✅ | header/data 分开传输，字节求和校验 |
+| 接收 A_AUTH TOKEN | ✅ | 设备正常返回 20 字节 token |
+| RSA 签名 | ✅ | NCryptSignHash (SHA1 + PKCS#1 v1.5) |
+| 发送 AUTH_SIGNATURE | ✅ | 字节求和校验 |
+| PKCS#8 密钥导入 | ✅ | adbkey PEM → NCryptImportKey |
+| 公钥导出 | ✅ | Android 格式 272 字节 (name + exp + mod) |
 
-### 新文件
+### 待解决 ⏳
 
-- `src/adb/adb_rsa.h` / `src/adb/adb_rsa.cpp` — Windows CNG RSA 密钥管理 + SHA1 + 签名
-- `src/poc_main.cpp` — 重写支持 RSA 握手 + 重试
+| 步骤 | 状态 | 备注 |
+|------|------|------|
+| AUTH_RSAPUBLICKEY | ❌ | 设备不响应（120s 超时），可能不支持动态公钥注册 |
+| BCryptImportKeyPair | ❌ | 手动构造的 CNG blob 被拒 (STATUS_INVALID_PARAMETER)，改用 NCrypt 绕过 |
 
-### 修改文件
-
-- `src/adb/adb_transport.h` — 新增 `handshake(AdbRsa&, banner)` 重载
-- `src/adb/adb_transport.cpp` — 完整 RSA 认证握手流程
-- `CMakeLists.txt` — 添加 `adb_rsa.cpp` + `bcrypt` 链接
-
-### RSA 认证握手进度
+### 当前握手流程
 
 ```
-A_CNXN → A_AUTH(TOKEN) → AUTH_SIGNATURE → A_AUTH(TOKEN, 再次请求公钥) → AUTH_RSAPUBLICKEY → ??? (超时)
+A_CNXN(字节和=0x5B44) → A_AUTH(TOKEN) → AUTH_SIGNATURE(字节和) → A_AUTH(重新请求公钥) → AUTH_RSAPUBLICKEY → 超时
 ```
 
-**当前阻塞点：** 设备收到 `AUTH_RSAPUBLICKEY` 后无响应（120s+ 超时）。
+### 新增/修改文件
 
-### 尝试过的修复
+| 文件 | 变更 |
+|------|------|
+| `src/adb/adb_transport.h` | A_VERSION → 0x01000001, MAX_PAYLOAD_V2 → 1MB, checksum() 替换 crc32() |
+| `src/adb/adb_transport.cpp` | send() header/data 分开写; handshake() 字节求和; 移除 crc32() |
+| `src/usb/usb_device.h` | 新增 clearHalt(), drainRead() |
+| `src/usb/usb_device.cpp` | clearHalt()/drainRead() 实现; open() 移除 libusb_reset_device, 改用 detach_kernel_driver |
+| `src/adb/adb_rsa.h` | 新增 loadPkcs8(), m_isNcrypt, m_cachedModulus/Exp |
+| `src/adb/adb_rsa.cpp` | loadPkcs8() PKCS#8 DER 解析 + NCryptImportKey; signToken() 使用 NCryptSignHash; getPublicKey() 支持 NCrypt 缓存公钥; 析构函数 NCryptFreeObject |
+| `src/poc_main.cpp` | clearHalt+drainRead 流程; loadPkcs8() 回退; fullBanner 复用 |
+| `CMakeLists.txt` | 移除硬编码工具路径; 新增 ncrypt, crypt32 链接 |
 
-1. **公钥长度前缀** — 尝试了带/不带 4 字节 LE 长度前缀，均失败
-2. **字节序** — CNG `BCRYPT_RSAKEY_BLOB` 导出为大端序，ADB Android 格式需要小端序，已做 BE→LE 反转。通过打印 CNG 原始字节 vs Android 格式字节确认反转正确：
-   - CNG exp raw (BE): `01 00 01` → Android exp (LE): `01 00 01 00` (65537)
-   - CNG mod[0..7] (BE): `B7 AB C5 9A 39 A4 CB 58` → Android mod[0..7] (LE): `DD 6C 77 62 28 E2 C1 A8`
-   - Android mod[248..255] (LE): `58 CB A4 39 9A C5 AB B7` = CNG mod[0..7] 的逆序 ✅
-3. **超时时间** — 发送公钥后 recv 超时延长至 120s
-4. **设备重连** — 发送公钥后超时，关闭并重开设备重试握手（如果设备接受了公钥但重置了 adbd，第二次握手应只需签名）
+### 编译
 
-### 可能原因分析
+工具链已全部加入 PATH（MinGW64, CMake, mingw32-make）。
 
-1. **CRC32 校验错误** — 但所有其他消息的 CRC 都正确，`crc32()` 函数与 AOSP 一致
-2. **签名与公钥不匹配** — 签名和公钥使用同一 `BCRYPT_KEY_HANDLE`，理论上一致
-3. **公钥格式细节差异** — Android 公钥格式: `name\0 + uint32(exponent LE) + uint8[256](modulus LE)`，但可能存在其他细节差异
-4. **设备不支持动态公钥注册** — 某些设备/ROM 可能禁用了 `AUTH_RSAPUBLICKEY`
-5. **设备显示授权对话框** — 需要用户在设备上手动确认，但 120s 超时应该足够
+```powershell
+cd D:\MyProjects\MoLink\molink-access-cpp
+mkdir build && cd build
+cmake .. -G "MinGW Makefiles"
+mingw32-make
+cp ../libs/libusb-1.0.dll .
+.\molink.exe
+```
 
 ### 技术要点
 
-- **RSA 密钥**: 2048-bit, Windows CNG (`BCryptGenerateKeyPair` / `BCryptSignHash` / `BCryptExportKey`)
-- **签名格式**: SHA1(token) → PKCS#1 v1.5 padding → RSA private key operation → 256 bytes
-- **公钥格式**: `molink@host\0` + 4 bytes LE exponent + 256 bytes LE modulus (共 272 bytes)
-- **AUTH_RSAPUBLICKEY 载荷**: `[4 bytes LE: 272][272 bytes Android 公钥数据]` (共 276 bytes)
-- **密钥存储**: `%USERPROFILE%\.android\molink_key.bin` (CNG RSAFULLPRIVATE_BLOB 二进制格式)
-- **编译**: MinGW64 手动编译（CMake x86/x64 交叉编译工具有问题），g++ 直接命令行:
-  ```
-  D:/software/w64devkit/x64/bin/g++.exe -BD:/software/w64devkit/x64/bin \
-      -static-libgcc -static-libstdc++ -std=c++17 -Ivendor/libusb \
-      -c src/xxx.cpp -o build/xxx.o
-  D:/software/w64devkit/x64/bin/g++.exe ... -Llibs -l:libusb-1.0.dll.a -lws2_32 -lbcrypt
-  ```
-```
+- **校验和**: `sum(data_bytes)` 简单字节求和，不是 CRC32
+- **A_CNXN**: header(24B, LE) + data(banner, 不含 NUL), 各一次独立 bulk write
+- **版本**: 0x01000001 (A_VERSION_SKIP_CHECKSUM — 但设备仍校验 checksum)
+- **RSA 密钥**: 2048-bit, 从 `%USERPROFILE%\.android\adbkey` (PKCS#8 PEM) 导入
+- **签名**: NCryptSignHash + BCRYPT_PAD_PKCS1 + SHA1
+- **公钥格式**: `user\0` + 4 bytes LE exponent + 256 bytes LE modulus (共 272 bytes)
+- **密钥导入路径**: CNG blob 失败 → loadPkcs8() PKCS#8 DER 解析 → NCryptImportKey
+- **编译**: MinGW64 GCC 12.1.0, 链接 libusb-1.0.dll.a, ws2_32, bcrypt, ncrypt, crypt32

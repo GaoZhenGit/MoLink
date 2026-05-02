@@ -15,8 +15,8 @@ constexpr uint32_t A_OKAY = 0x59414b4f;
 constexpr uint32_t A_CLSE = 0x45534c43;
 constexpr uint32_t A_WRTE = 0x45545257;
 
-constexpr uint32_t A_VERSION = 0x01000000;
-constexpr uint32_t MAX_PAYLOAD_V2 = 256 * 1024;
+constexpr uint32_t A_VERSION = 0x01000001;
+constexpr uint32_t MAX_PAYLOAD_V2 = 0x00100000;  // 1MB, 与 adb.exe 一致
 
 constexpr uint32_t AUTH_TOKEN = 1;
 constexpr uint32_t AUTH_SIGNATURE = 2;
@@ -54,7 +54,11 @@ public:
     void closeChannel(uint32_t local_id, uint32_t remote_id);
 
     const std::vector<uint8_t>& getAuthToken() const { return m_auth_token; }
-    static uint32_t crc32_direct(const uint8_t* data, uint32_t len) { return crc32(data, len); }
+    static uint32_t checksum(const uint8_t* data, uint32_t len) {
+        uint32_t sum = 0;
+        for (uint32_t i = 0; i < len; i++) sum += data[i];
+        return sum;
+    }
 
 private:
     UsbDevice& m_device;

@@ -18,6 +18,8 @@ public:
     ~UsbDevice();
 
     bool open();
+    bool clearHalt(uint8_t ep);
+    void drainRead();
     std::string getSerial() const;
     uint8_t getReadEndpoint() const  { return m_read_ep; }
     uint8_t getWriteEndpoint() const { return m_write_ep; }

@@ -14,6 +14,7 @@ public:
 
     bool generateKey();
     bool loadKey(const std::string& path);
+    bool loadPkcs8(const std::string& path);
     bool saveKey(const std::string& path);
 
     std::vector<uint8_t> signToken(const uint8_t* token, size_t token_len);
@@ -24,6 +25,9 @@ public:
 private:
     BCRYPT_KEY_HANDLE m_key;
     BCRYPT_ALG_HANDLE m_alg;
+    bool m_isNcrypt = false;
+    std::vector<uint8_t> m_cachedModulus;  // 256 bytes LE
+    std::vector<uint8_t> m_cachedExp;      // 4 bytes LE
 
     static std::vector<uint8_t> sha1(const uint8_t* data, size_t len);
     std::vector<uint8_t> exportKeyBlob();

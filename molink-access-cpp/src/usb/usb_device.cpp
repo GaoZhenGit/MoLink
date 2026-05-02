@@ -99,19 +99,33 @@ UsbDevice::~UsbDevice() { close(); }
 bool UsbDevice::open() {
     if (m_open) return true;
 
+    // 打印设备路径（调试用）
+    uint8_t bus = libusb_get_bus_number(m_device);
+    uint8_t addr = libusb_get_device_address(m_device);
+    uint8_t port = libusb_get_port_number(m_device);
+    printf("USB: device bus=%d addr=%d port=%d\n", bus, addr, port);
+
     int ret = libusb_open(m_device, &m_handle);
     if (ret != 0) {
         printf("USB: libusb_open failed: %s\n", libusb_error_name(ret));
         return false;
     }
 
-    // USB reset (尝试唤醒设备)
-    ret = libusb_reset_device(m_handle);
-    if (ret != 0) {
-        printf("USB: libusb_reset_device failed (ignored): %s\n", libusb_error_name(ret));
-    } else {
-        printf("USB: Device reset OK\n");
+    // 显式设置配置（与 adb.exe 的 SET_CONFIGURATION 一致）
+    int config = 0;
+    ret = libusb_get_configuration(m_handle, &config);
+    printf("USB: current config=%d (ret=%d)\n", config, ret);
+    if (config != 1) {
+        ret = libusb_set_configuration(m_handle, 1);
+        if (ret != 0) {
+            printf("USB: libusb_set_configuration(1) failed: %s\n", libusb_error_name(ret));
+        } else {
+            printf("USB: Configuration set to 1\n");
+        }
     }
+
+    // Windows: 尝试 detach kernel driver（WinUSB 替换驱动后通常没有）
+    libusb_detach_kernel_driver(m_handle, m_interface_number);
 
     ret = libusb_claim_interface(m_handle, m_interface_number);
     if (ret != 0) {
@@ -129,6 +143,29 @@ bool UsbDevice::open() {
     m_open = true;
     printf("USB: Device opened, interface %d claimed (read=0x%02X write=0x%02X)\n",
            m_interface_number, m_read_ep, m_write_ep);
+    return true;
+}
+
+void UsbDevice::drainRead() {
+    if (!m_handle) return;
+    uint8_t buf[256];
+    int got = 0;
+    int drained = 0;
+    while (bulkRead(buf, sizeof(buf), &got, 200)) {
+        drained += got;
+        printf("USB: drained %d bytes (stale data)\n", got);
+    }
+    if (drained > 0) printf("USB: total drained %d bytes\n", drained);
+}
+
+bool UsbDevice::clearHalt(uint8_t ep) {
+    if (!m_handle) return false;
+    int ret = libusb_clear_halt(m_handle, ep);
+    if (ret != 0) {
+        printf("USB: clear_halt(0x%02X) failed: %s\n", ep, libusb_error_name(ret));
+        return false;
+    }
+    printf("USB: clear_halt(0x%02X) OK\n", ep);
     return true;
 }
 
