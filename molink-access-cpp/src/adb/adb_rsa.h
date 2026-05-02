@@ -31,6 +31,7 @@ private:
     std::vector<uint8_t> m_cachedExp;      // 4 bytes BE
 
     static std::vector<uint8_t> sha1(const uint8_t* data, size_t len);
+    static std::vector<uint8_t> sha256(const uint8_t* data, size_t len);
     static std::string base64Encode(const uint8_t* data, size_t len);
     std::vector<uint8_t> exportKeyBlob();
     bool importKeyBlob(const uint8_t* blob, size_t len);

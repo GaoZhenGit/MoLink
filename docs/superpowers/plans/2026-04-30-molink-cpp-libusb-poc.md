@@ -941,9 +941,13 @@ Task 1（下载libusb+项目骨架）
 
 ---
 
-## 当前状态 (2026-05-02) — 魅族设备 POC 已完成
+## 当前状态 (2026-05-03) — 魅族设备 POC 已完成
 
-**POC 核心目标达成。** USB 通信 + ADB 协议 + RSA 认证握手全部打通。通过 Wireshark 抓包 (`docs/mezu.pcapng`) 分析 adb.exe 的正常通信流程，修复了三个关键问题。
+**POC 核心目标全部达成。** USB 通信 + ADB 协议 + RSA 认证握手全部打通。通过两次 Wireshark 抓包分析 adb.exe 的正常通信流程：
+
+- `docs/mezu.pcapng` — 基础握手流程（校验和、header/data 分离等）
+- `docs/mezu-auth.pcapng` — 完整首次授权握手（AUTH_RSAPUBLICKEY 流程）
+
 
 ### 关键发现
 
@@ -1041,12 +1045,26 @@ A_CNXN → A_AUTH(TOKEN) → AUTH_SIGNATURE → A_AUTH(TOKEN, 要公钥)
 
 | 步骤 | 状态 | 备注 |
 |------|------|------|
-| adbkey 复用 | ⏳ | NCryptSignHash 签名错误，需改为手动 PKCS#1 或用 BCrypt 密钥 |
-| 自动重连 | ⏳ | 连接断开后自动恢复，需实现 |
+| 签名免弹窗 | ⏳ | BCryptSignHash 签名不能被魅族 adbd 验证，每次需 RSAPUBLICKEY+弹窗。疑为 DigestInfo 中 AlgorithmIdentifier 的 NULL 参数格式不一致（`30 09...05 00` vs `30 07...`），需手动控制 PKCS#1 填充 |
+| 自动重连 | ⏳ | 连接断开后自动恢复 |
 
-### 当前状态总结
+### 明日攻坚方向
 
-POC 所有核心目标已达成。使用 BCrypt 生成新密钥 + 手动 PKCS#1 v1.5 签名 + 自建 RSAPublicKey 结构体的方案完全可行。遗留问题是让 adb 已有密钥（adbkey）也能工作——需要解决 NCryptSignHash 签名不一致的问题，或者从 PKCS#8 中提取完整 RSA 参数后用 BCryptImportKeyPair 导入。
+**根因推测**：BCryptSignHash 在 DigestInfo 中 SHA-1 的 AlgorithmIdentifier 可能不带 NULL 参数（`30 07`），而魅族 adbd 期望带 NULL（`30 09`）。这会导致签名完全不同，设备无法验证。
+
+**方案**：手动构建带 NULL 的 PKCS#1 v1.5 填充块 + `BCryptDecrypt(BCRYPT_PAD_NONE)` 裸 RSA。已验证手动 PKCS#1 可工作（第一天测试确认），只需确认 DigestInfo 格式。
+
+### 当前架构总结
+
+```
+poc_main → UsbDevice(libusb) → AdbTransport(ADB 协议) → AdbRsa(BCrypt)
+         ├─ discover/打开/序列号
+         ├─ 握手: CNXN → TOKEN → SIGNATURE → TOKEN → RSAPUBLICKEY → CNXN
+         └─ 通道: A_OPEN → A_CLSE (worker 未启动)
+```
+
+密钥来源：`%USERPROFILE%\.android\adbkey`（PKCS#8 PEM → DER 解析 → BCrypt blob 导入）
+公钥来源：`%USERPROFILE%\.android\adbkey.pub`（base64 + user@host，直接复用）
 
 ### 新增/修改文件
 

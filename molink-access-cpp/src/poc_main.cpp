@@ -54,11 +54,25 @@ int main() {
         "sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send,"
         "openscreen_mdns";
 
-    // RSA key — BCrypt 生成 + 手动 PKCS#1 签名
+    // RSA key — 优先用 adb 已授权密钥（避免重复弹窗）
     printf("\n--- Step 5: RSA Key ---\n");
     AdbRsa rsa;
     std::string keyPath = getKeyPath();
-    if (!rsa.loadKey(keyPath)) {
+    bool keyReady = false;
+    if (rsa.loadKey(keyPath)) {
+        keyReady = true;
+    } else {
+        // 尝试从 adbkey 导入（BCrypt blob，签名可被设备识别）
+        char appdata2[MAX_PATH] = {};
+        if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata2) == S_OK) {
+            std::string adbKeyPath = std::string(appdata2) + "\\.android\\adbkey";
+            if (rsa.loadPkcs8(adbKeyPath)) {
+                printf("RSA: Adb key imported via BCrypt\n");
+                keyReady = true;
+            }
+        }
+    }
+    if (!keyReady) {
         printf("Generating new RSA key pair (BCrypt)...\n");
         if (!rsa.generateKey()) {
             printf("FAIL: Cannot generate RSA key\n");
