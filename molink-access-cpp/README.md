@@ -51,76 +51,100 @@ Relay Thread × N (每 TCP 连接一个)
 
 ## 命令
 
-```powershell
-molink                          # 前台调试模式（Ctrl+C 退出）
-molink start   [options]        # 启动后台守护进程
-molink stop                     # 停止守护进程
-molink devices                  # 查询 USB ADB 设备列表
-molink status                   # 查询守护进程状态
+```
+molink                         显示帮助
+molink run    [options]         前台运行（Ctrl+C 退出）
+molink start  [options]         后台守护进程
+molink stop                     停止守护进程
+molink devices                  列出 ADB 设备 + 授权状态
+molink status                   查询守护进程状态
 ```
 
 | 参数 | 简写 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--port` | `-p` | 1080 | 本地 TCP 端口 |
+| `--port` | `-p` | 1080 | 本地 TCP 监听端口 |
 | `--rport` | `-r` | 1081 | 设备目标端口 |
-| `--serial` | `-s` | (第一个设备) | 设备序列号 |
+| `--serial` | `-s` | 第一个设备 | 指定设备序列号 |
+
+### 使用示例
+
+```powershell
+# 前台运行（调试）
+.\molink.exe run -p 1080
+
+# 后台守护
+.\molink.exe start -p 1080 -r 1081
+curl --socks5 127.0.0.1:1080 --proxy-user socks5:password123 https://www.baidu.com
+.\molink.exe status     # → connected  serial=XXX  port=1080  connections=3
+.\molink.exe stop       # → Daemon stopped.
+
+# 重启（start 自动检测已有进程 → 先停旧再启新）
+.\molink.exe start -p 2080
+
+# 指定设备
+.\molink.exe run -s 852QLDV923XMM -p 1080
+
+# 设备列表
+.\molink.exe devices
+# Keys: C:\Users\xxx\.android
+#   molink_key.bin : missing
+#   adbkey         : found
+#   adbkey.pub     : found
+#
+# #    SERIAL                 AUTH
+# ---  ---------------------- ----
+# 0    852QLDV923XMM          yes
+```
 
 ## 编译
 
 **环境：** Windows 10/11, MinGW-w64 64-bit, CMake 3.14+
 
-验证工具链：
 ```powershell
-g++ --version      # 应输出 x86_64-w64-mingw32
+# 验证工具链
+g++ --version      # x86_64-w64-mingw32
 cmake --version    # 3.14+
+
+# 编译
+cd molink-access-cpp
+mkdir build && cd build
+cmake .. -G "MinGW Makefiles"
+mingw32-make
 ```
 
-**步骤：**
+产物 `build\molink.exe`，**零第三方 DLL 依赖**（libusb 静态编译），复制到任意 Windows 机器直接运行。
+
+### libusb 静态库编译
+
+libusb 已预编译在 `libs/libusb-1.0.a`（v1.0.28, MinGW-w64 64-bit）。如需重新编译：
 
 ```powershell
-# 1. 进入项目目录
-cd molink-access-cpp
+# 1. 下载源码
+# https://github.com/libusb/libusb/releases
+curl -L -o libusb.tar.bz2 https://github.com/libusb/libusb/releases/download/v1.0.28/libusb-1.0.28.tar.bz2
 
-# 2. 创建 build 目录
-mkdir build
-cd build
+# 2. 解压
+tar xf libusb.tar.bz2 && cd libusb-1.0.28
 
-# 3. CMake 生成 MinGW Makefile
-cmake .. -G "MinGW Makefiles"
+# 3. 编译静态库
+./configure --host=x86_64-w64-mingw32 --enable-static --disable-shared
+make -j4
 
-# 4. 编译
-mingw32-make
-
-# 5. 确认产物
-dir molink.exe
+# 4. 复制产物
+cp libusb/.libs/libusb-1.0.a ../third_party/libusb/lib/
+cp libusb/libusb.h ../third_party/libusb/include/
 ```
 
-输出：`build\molink.exe`，libusb-1.0.dll 自动复制到同目录。
+源码地址：[https://github.com/libusb/libusb](https://github.com/libusb/libusb)
 
 **常见问题：**
 
 | 现象 | 解决 |
 |------|------|
 | `cmake: command not found` | 安装 CMake 并加入 PATH |
-| `g++: command not found` | 安装 [w64devkit](https://github.com/skeeto/w64devkit) 或 MinGW-w64，加入 PATH |
-| `libusb-1.0.dll.a not found` | 确认 `libs/` 目录在项目根目录 |
-| `Permission denied` (link) | 关闭正在运行的 molink.exe 后重试 |
-
-## 使用示例
-
-```powershell
-# 前台调试
-.\molink.exe -p 1080
-
-# 后台守护
-.\molink.exe start -p 1080
-curl --socks5 127.0.0.1:1080 --proxy-user socks5:password123 https://www.baidu.com
-.\molink.exe status
-.\molink.exe stop
-
-# 查询设备
-.\molink.exe devices
-```
+| `g++: command not found` | 安装 [w64devkit](https://github.com/skeeto/w64devkit) 或 MinGW-w64 |
+| `Permission denied` (link) | `taskkill /F /IM molink.exe` 后重试 |
+| `configure: error: ...` | 确保 MinGW bin 目录在 PATH 中 |
 
 ## 进程管理
 
@@ -154,21 +178,22 @@ AUTH_RSAPUBLICKEY 来源：
 ```
 molink-access-cpp/
 ├── CMakeLists.txt
-├── libs/
-│   └── libusb-1.0.dll
-├── vendor/libusb/
-│   └── libusb.h
+├── third_party/libusb/
+│   ├── include/
+│   │   └── libusb.h                # libusb 头文件
+│   └── lib/
+│       └── libusb-1.0.a            # libusb 静态库（v1.0.28）
 └── src/
-    ├── main.cpp                     # CLI 入口（多命令）
+    ├── main.cpp                    # CLI 入口（run/start/stop/devices/status）
     ├── usb/
-    │   ├── usb_device.h/cpp         # libusb 封装
+    │   └── usb_device.h/cpp        # libusb 封装（发现/打开/读写）
     ├── adb/
-    │   ├── adb_transport.h/cpp      # ADB 协议（send/recv/handshake）
-    │   ├── adb_rsa.h/cpp            # RSA 密钥 + 签名
-    │   ├── adb_reader.h/cpp         # USB 读线程 + 消息分发
-    │   ├── adb_client.h/cpp         # 高层客户端 + ChannelMap
+    │   ├── adb_transport.h/cpp     # ADB 协议（send/recv/handshake/openChannel）
+    │   ├── adb_rsa.h/cpp           # BCrypt RSA（生成/导入/签名/RSAPublicKey）
+    │   ├── adb_reader.h/cpp        # USB 读线程 + Channel/PendingOpen 分发
+    │   └── adb_client.h/cpp        # 高层客户端（connect/ChannelMap/生命周期）
     ├── cli/
-    │   ├── named_pipe.h/cpp         # Named Pipe Server
+    │   └── named_pipe.h/cpp        # Named Pipe Server（消息模式）
     └── forward/
-        ├── forwarder.h/cpp          # TCP 端口转发（多连接并发）
+        └── forwarder.h/cpp         # TCP 转发（多线程并发，max 16）
 ```

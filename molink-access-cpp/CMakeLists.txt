@@ -8,8 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
 
-include_directories(${CMAKE_SOURCE_DIR}/vendor/libusb)
-link_directories(${CMAKE_SOURCE_DIR}/libs)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/include)
+link_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/lib)
 
 add_executable(molink
     src/main.cpp
@@ -22,11 +22,4 @@ add_executable(molink
     src/forward/forwarder.cpp
 )
 
-target_link_libraries(molink libusb-1.0.dll.a ws2_32 bcrypt crypt32)
-
-# 构建后复制 libusb DLL 到输出目录
-add_custom_command(TARGET molink POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/libs/libusb-1.0.dll"
-        "$<TARGET_FILE_DIR:molink>"
-)
+target_link_libraries(molink libusb-1.0.a ws2_32 bcrypt crypt32 winusb setupapi ole32)
