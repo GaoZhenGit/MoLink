@@ -4,6 +4,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <shlobj.h>
+#include <io.h>
 #include "adb/adb_client.h"
 #include "forward/forwarder.h"
 #include "cli/named_pipe.h"
@@ -96,19 +98,87 @@ static std::string sendPipeCmd(const std::string& cmd) {
 // ---- 命令实现 ----
 
 static int cmdDevices() {
-    auto devices = UsbDevice::discover();
-    if (devices.empty()) {
-        printf("No ADB devices found.\n");
-        return 1;
+    // 1. 密钥文件
+    char appdata[MAX_PATH] = {};
+    if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata) == S_OK) {
+        printf("Keys: %s\\.android\n", appdata);
+        auto exists = [](const std::string& p) {
+            return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+        };
+        std::string base = std::string(appdata) + "\\.android\\";
+        printf("  molink_key.bin : %s\n", exists(base + "molink_key.bin") ? "found" : "missing");
+        printf("  adbkey         : %s\n", exists(base + "adbkey") ? "found" : "missing");
+        printf("  adbkey.pub     : %s\n", exists(base + "adbkey.pub") ? "found" : "missing");
     }
-    printf("\nADB Devices (%zu):\n", devices.size());
-    for (size_t i = 0; i < devices.size(); i++) {
-        auto& dev = devices[i];
-        // 临时打开读 serial，然后关闭
-        if (dev.open()) {
-            printf("  [%zu] %s\n", i, dev.getSerial().c_str());
-            dev.close();
+
+    // 2. 静默探测（抑制 USB/ADB/RSA 内部 debug 输出）
+    fflush(stdout);
+    int saved = _dup(1);
+    freopen("NUL", "w", stdout);
+
+    auto devices = UsbDevice::discover();
+
+    AdbRsa rsa;
+    bool keyReady = false;
+    if (appdata[0]) {
+        std::string kp = std::string(appdata) + "\\.android\\molink_key.bin";
+        if (!rsa.loadKey(kp)) {
+            std::string ak = std::string(appdata) + "\\.android\\adbkey";
+            if (rsa.loadPkcs8(ak)) keyReady = true;
+        } else keyReady = true;
+    }
+
+    struct DevResult { std::string serial; bool authorized; };
+    std::vector<DevResult> results;
+
+    for (auto& dev : devices) {
+        DevResult r;
+        if (!dev.open()) { results.push_back(r); continue; }
+        dev.clearHalt(dev.getReadEndpoint());
+        dev.clearHalt(dev.getWriteEndpoint());
+        dev.drainRead();
+        r.serial = dev.getSerial();
+
+        // 快速握手（5s 超时 → 未授权）
+        r.authorized = false;
+        if (keyReady) {
+            AdbTransport tr(dev);
+            uint32_t maxdata = MAX_PAYLOAD_V2;
+            tr.send(A_CNXN, A_VERSION, maxdata, "host::", 5);
+            AdbMessage msg;
+            std::vector<uint8_t> data;
+            // 单轮：等 5s，期望直接 A_CNXN 或签名后 A_CNXN
+            if (tr.recv(msg, data, 5000)) {
+                if (msg.command == A_CNXN) {
+                    r.authorized = true;
+                } else if (msg.command == A_AUTH && msg.arg0 == AUTH_TOKEN) {
+                    auto sig = rsa.signToken(data.data(), data.size());
+                    if (!sig.empty()) {
+                        tr.send(A_AUTH, AUTH_SIGNATURE, 0, sig.data(), (uint32_t)sig.size());
+                        if (tr.recv(msg, data, 2000)) {
+                            if (msg.command == A_CNXN) r.authorized = true;
+                        }
+                    }
+                }
+            }
         }
+
+        dev.close();
+        results.push_back(r);
+    }
+
+    fflush(stdout);
+    _dup2(saved, 1);
+    _close(saved);
+
+    // 3. 输出
+    if (devices.empty()) { printf("No ADB devices found.\n"); return 1; }
+    printf("\n%-4s %-22s %s\n", "#", "SERIAL", "AUTH");
+    printf("%-4s %-22s %s\n", "---", "----------------------", "----");
+    for (size_t i = 0; i < results.size(); i++) {
+        printf("%-4zu %-22s %s\n", i,
+               results[i].serial.empty() ? "-" : results[i].serial.c_str(),
+               results[i].serial.empty() ? "-" : (results[i].authorized ? "yes" : "no"));
     }
     return 0;
 }
@@ -239,6 +309,18 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
 // ---- molink start 命令 ----
 static int cmdStart(uint16_t localPort, uint16_t remotePort,
                     const std::string& serial) {
+    // 如果已有 daemon，先停旧再启新
+    if (!sendPipeCmd("status").empty()) {
+        printf("Daemon is running, restarting...\n");
+        auto resp = sendPipeCmd("stop");
+        if (resp != "ok") {
+            printf("FAIL: Cannot stop existing daemon\n");
+            return 1;
+        }
+        // 等旧进程完全退出
+        Sleep(1500);
+    }
+
     // 拼命令行: molink.exe --daemon <args>
     char exePath[MAX_PATH];
     GetModuleFileNameA(nullptr, exePath, sizeof(exePath));
@@ -260,11 +342,34 @@ static int cmdStart(uint16_t localPort, uint16_t remotePort,
         return 1;
     }
 
-    CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    printf("Daemon started (pid=%lu). Use 'molink stop' to stop.\n",
-           pi.dwProcessId);
+    // 等待 daemon 启动完成（最多 8 秒）
+    printf("Starting daemon (pid=%lu)...\n", pi.dwProcessId);
+    bool ok = false;
+    for (int i = 0; i < 16; i++) {
+        Sleep(500);
+        auto resp = sendPipeCmd("status");
+        if (!resp.empty() && resp.find("connected") != std::string::npos) {
+            printf("%s\n", resp.c_str());
+            ok = true;
+            break;
+        }
+        // 进程是否已退出（启动失败）
+        DWORD exitCode = STILL_ACTIVE;
+        if (GetExitCodeProcess(pi.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+            printf("FAIL: Daemon exited with code %lu\n", exitCode);
+            break;
+        }
+    }
+    if (!ok) {
+        printf("FAIL: Daemon did not start. Check molinkd.log\n");
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        return 1;
+    }
+
+    CloseHandle(pi.hProcess);
     return 0;
 }
 
@@ -303,7 +408,7 @@ static int foregroundMode(uint16_t localPort, uint16_t remotePort,
 static void printUsage() {
     printf("MoLink Access - ADB USB Proxy\n\n"
            "Usage:\n"
-           "  molink                        Run in foreground (debug)\n"
+           "  molink run  [options]         Run in foreground\n"
            "  molink start [options]        Start daemon in background\n"
            "  molink stop                   Stop running daemon\n"
            "  molink devices                List ADB devices\n"
@@ -319,60 +424,48 @@ static void printUsage() {
 int main(int argc, char* argv[]) {
     setvbuf(stdout, nullptr, _IONBF, 0);
 
-    if (argc > 1 && strcmp(argv[1], "--help") == 0) {
+    // 无参数 → 帮助
+    if (argc < 2) {
+        printUsage();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
         printUsage();
         return 0;
     }
 
     // 命令模式
-    if (argc > 1 && strcmp(argv[1], "devices") == 0) {
-        return cmdDevices();
-    }
-    if (argc > 1 && strcmp(argv[1], "status") == 0) {
-        return cmdStatus();
-    }
-    if (argc > 1 && strcmp(argv[1], "stop") == 0) {
-        return cmdStop();
-    }
-
-    // 隐藏参数：--daemon（由 molink start 调起）
-    bool isDaemon = false;
-    if (argc > 1 && strcmp(argv[1], "--daemon") == 0) {
-        isDaemon = true;
-    }
+    if (strcmp(argv[1], "devices") == 0) return cmdDevices();
+    if (strcmp(argv[1], "status") == 0)  return cmdStatus();
+    if (strcmp(argv[1], "stop") == 0)    return cmdStop();
 
     // 解析 options
     uint16_t localPort = 1080;
     uint16_t remotePort = 1081;
     std::string serial;
-    int startIdx = 1;
-
-    if (argc > 1 && (strcmp(argv[1], "start") == 0 || strcmp(argv[1], "--daemon") == 0)) {
-        startIdx = 2;
-    }
+    bool isRun = (strcmp(argv[1], "run") == 0);
+    bool isStart = (strcmp(argv[1], "start") == 0);
+    bool isDaemon = (strcmp(argv[1], "--daemon") == 0);
+    int startIdx = (isRun || isStart || isDaemon) ? 2 : 1;
 
     for (int i = startIdx; i < argc; i++) {
-        if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
+        if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc)
             localPort = (uint16_t)atoi(argv[++i]);
-        } else if ((strcmp(argv[i], "--rport") == 0 || strcmp(argv[i], "-r") == 0) && i + 1 < argc) {
+        else if ((strcmp(argv[i], "--rport") == 0 || strcmp(argv[i], "-r") == 0) && i + 1 < argc)
             remotePort = (uint16_t)atoi(argv[++i]);
-        } else if ((strcmp(argv[i], "--serial") == 0 || strcmp(argv[i], "-s") == 0) && i + 1 < argc) {
+        else if ((strcmp(argv[i], "--serial") == 0 || strcmp(argv[i], "-s") == 0) && i + 1 < argc)
             serial = argv[++i];
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            printUsage();
-            return 0;
+        else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printUsage(); return 0;
         }
     }
 
-    if (argc > 1 && strcmp(argv[1], "start") == 0) {
-        return cmdStart(localPort, remotePort, serial);
-    }
+    if (isStart)  return cmdStart(localPort, remotePort, serial);
+    if (isDaemon) return daemonMain(localPort, remotePort, serial);
+    if (isRun)    return foregroundMode(localPort, remotePort, serial);
 
-    // 隐藏：--daemon 实际后台进程入口
-    if (isDaemon) {
-        return daemonMain(localPort, remotePort, serial);
-    }
-
-    // 无命令 → 前台模式
-    return foregroundMode(localPort, remotePort, serial);
+    printf("Unknown command: %s\n", argv[1]);
+    printUsage();
+    return 1;
 }

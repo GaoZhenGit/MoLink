@@ -67,13 +67,44 @@ molink status                   # 查询守护进程状态
 
 ## 编译
 
-MinGW-w64, CMake 3.14+, libusb-1.0
+**环境：** Windows 10/11, MinGW-w64 64-bit, CMake 3.14+
+
+验证工具链：
+```powershell
+g++ --version      # 应输出 x86_64-w64-mingw32
+cmake --version    # 3.14+
+```
+
+**步骤：**
 
 ```powershell
-cd molink-access-cpp && mkdir build && cd build
+# 1. 进入项目目录
+cd molink-access-cpp
+
+# 2. 创建 build 目录
+mkdir build
+cd build
+
+# 3. CMake 生成 MinGW Makefile
 cmake .. -G "MinGW Makefiles"
+
+# 4. 编译
 mingw32-make
+
+# 5. 确认产物
+dir molink.exe
 ```
+
+输出：`build\molink.exe`，libusb-1.0.dll 自动复制到同目录。
+
+**常见问题：**
+
+| 现象 | 解决 |
+|------|------|
+| `cmake: command not found` | 安装 CMake 并加入 PATH |
+| `g++: command not found` | 安装 [w64devkit](https://github.com/skeeto/w64devkit) 或 MinGW-w64，加入 PATH |
+| `libusb-1.0.dll.a not found` | 确认 `libs/` 目录在项目根目录 |
+| `Permission denied` (link) | 关闭正在运行的 molink.exe 后重试 |
 
 ## 使用示例
 
