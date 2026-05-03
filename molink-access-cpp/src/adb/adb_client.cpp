@@ -58,14 +58,12 @@ bool AdbClient::loadOrGenerateKey() {
 bool AdbClient::connect(const std::string& serial) {
     if (m_connected) return true;
 
-    // 1. 发现设备
     m_devices = UsbDevice::discover();
     if (m_devices.empty()) {
         printf("ADB: No device found\n");
         return false;
     }
 
-    // 2. 选择设备
     UsbDevice* selected = nullptr;
     for (auto& dev : m_devices) {
         if (serial.empty() || dev.getSerial() == serial) {
@@ -75,10 +73,8 @@ bool AdbClient::connect(const std::string& serial) {
     }
     if (!selected) selected = &m_devices[0];
 
-    // 3. 打开设备
     if (!selected->open()) return false;
 
-    // 4. 清除 halt + 排空残留数据
     selected->clearHalt(selected->getReadEndpoint());
     selected->clearHalt(selected->getWriteEndpoint());
     selected->drainRead();
@@ -86,13 +82,11 @@ bool AdbClient::connect(const std::string& serial) {
     m_serial = selected->getSerial();
     printf("ADB: Device %s opened\n", m_serial.empty() ? "(no serial)" : m_serial.c_str());
 
-    // 5. 加载 RSA 密钥
     if (!loadOrGenerateKey()) {
         selected->close();
         return false;
     }
 
-    // 6. 握手
     m_transport.reset(new AdbTransport(*selected));
 
     const char* banner = "host::features=shell_v2,cmd,stat_v2,ls_v2,"
@@ -106,6 +100,8 @@ bool AdbClient::connect(const std::string& serial) {
         if (m_transport->handshake(*m_rsa, banner)) {
             m_selectedDev = selected;
             m_connected = true;
+            m_reader.start(m_transport.get(), &m_channels, &m_pending,
+                          &m_channelMutex, &m_writeMutex);
             printf("ADB: Connected\n");
             return true;
         }
@@ -127,6 +123,32 @@ bool AdbClient::connect(const std::string& serial) {
 }
 
 void AdbClient::disconnect() {
+    m_reader.stop();
+
+    // 唤醒所有 pending open
+    {
+        std::lock_guard<std::mutex> lock(m_channelMutex);
+        for (auto& pair : m_pending) {
+            {
+                std::lock_guard<std::mutex> poLock(pair.second->mtx);
+                pair.second->error = true;
+                pair.second->done = true;
+            }
+            pair.second->cv.notify_one();
+        }
+    }
+
+    // 清空所有通道
+    {
+        std::lock_guard<std::mutex> lock(m_channelMutex);
+        for (auto& pair : m_channels) {
+            std::lock_guard<std::mutex> chLock(pair.second->mtx);
+            pair.second->closed = true;
+            pair.second->draining = true;
+        }
+        m_channels.clear();
+    }
+
     m_connected = false;
     m_transport.reset();
     m_rsa.reset();
@@ -139,34 +161,94 @@ void AdbClient::disconnect() {
     m_nextLocalId = 1;
 }
 
+int AdbClient::getActiveChannelCount() const {
+    std::lock_guard<std::mutex> lock(m_channelMutex);
+    return (int)m_channels.size();
+}
+
 // ---- Channel Management ----
 
-AdbClient::Channel AdbClient::openChannel(const std::string& destination) {
-    Channel ch;
-    if (!m_connected || !m_transport) return ch;
+ChannelPtr AdbClient::openChannel(const std::string& destination) {
+    if (!m_connected || !m_transport) return nullptr;
 
-    ch.localId = m_nextLocalId++;
-    ch.remoteId = m_transport->openChannel(destination, ch.localId);
-    if (ch.remoteId == 0) {
-        printf("ADB: Failed to open channel to %s\n", destination.c_str());
+    uint32_t localId = m_nextLocalId++;
+    auto po = std::make_shared<PendingOpen>();
+
+    // 先注册 pending，再发送 A_OPEN（避免响应比注册先到）
+    {
+        std::lock_guard<std::mutex> lock(m_channelMutex);
+        m_pending[localId] = po;
     }
+
+    // 发送 A_OPEN 不自己读 recv（AdbReader 负责分发响应）
+    {
+        std::lock_guard<std::mutex> wLock(m_writeMutex);
+        m_transport->send(A_OPEN, localId, 0,
+                         destination.c_str(),
+                         (uint32_t)destination.size() + 1);
+    }
+
+    // 等待 AdbReader 收到响应
+    uint32_t remoteId = 0;
+    bool error = false;
+    {
+        std::unique_lock<std::mutex> poLock(po->mtx);
+        po->cv.wait(poLock, [&] { return po->done; });
+        remoteId = po->remoteId;
+        error = po->error;
+    }
+
+    // 移除 pending
+    {
+        std::lock_guard<std::mutex> lock(m_channelMutex);
+        m_pending.erase(localId);
+    }
+
+    if (error || remoteId == 0) {
+        printf("ADB: Failed to open channel to %s\n", destination.c_str());
+        return nullptr;
+    }
+
+    auto ch = std::make_shared<Channel>();
+    ch->localId = localId;
+    ch->remoteId = remoteId;
+
+    {
+        std::lock_guard<std::mutex> lock(m_channelMutex);
+        m_channels[localId] = ch;
+    }
+
+    printf("ADB: Channel %u opened to %s (remote=%u)\n",
+           localId, destination.c_str(), remoteId);
     return ch;
 }
 
-void AdbClient::closeChannel(const Channel& ch) {
-    if (m_transport) {
-        m_transport->closeChannel(ch.localId, ch.remoteId);
+void AdbClient::closeChannel(ChannelPtr ch) {
+    if (!ch || !m_transport) return;
+
+    // 标记 draining，阻止 AdbReader 继续往队列推数据
+    {
+        std::lock_guard<std::mutex> chLock(ch->mtx);
+        ch->draining = true;
     }
+
+    // 从 map 移除（AdbReader 之后读到的消息会丢弃）
+    {
+        std::lock_guard<std::mutex> lock(m_channelMutex);
+        m_channels.erase(ch->localId);
+    }
+
+    // 发送 A_CLSE
+    {
+        std::lock_guard<std::mutex> wLock(m_writeMutex);
+        m_transport->closeChannel(ch->localId, ch->remoteId);
+    }
+
+    printf("ADB: Channel %u/%u closed\n", ch->localId, ch->remoteId);
 }
 
-bool AdbClient::readChannel(const Channel& ch, std::vector<uint8_t>& data,
-                             uint32_t timeoutMs) {
-    if (!m_transport) return false;
-    return m_transport->readChannel(ch.localId, ch.remoteId, data, timeoutMs);
-}
-
-bool AdbClient::writeChannel(const Channel& ch, const void* data, uint32_t len) {
-    if (!m_transport) return false;
+bool AdbClient::writeChannel(ChannelPtr ch, const void* data, uint32_t len) {
+    if (!m_transport || !ch) return false;
     std::lock_guard<std::mutex> lock(m_writeMutex);
-    return m_transport->writeChannel(ch.localId, ch.remoteId, data, len);
+    return m_transport->writeChannel(ch->localId, ch->remoteId, data, len);
 }

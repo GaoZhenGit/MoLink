@@ -8,7 +8,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <vector>
+#include <cstdint>
 
 class Forwarder {
 public:
@@ -19,10 +19,14 @@ public:
     void stop();
     bool isRunning() const { return m_running; }
     uint16_t getLocalPort() const { return m_localPort; }
+    int getConnectionCount() const;
 
 private:
-    void runLoop();        // 主循环: accept → relay → accept ...
-    bool relay(SOCKET clientSock);
+    void acceptLoop();
+    void relay(SOCKET clientSock);
+
+    bool tryAcquireSlot();
+    void releaseSlot();
 
     AdbClient& m_client;
     uint16_t m_localPort;
@@ -30,6 +34,11 @@ private:
     SOCKET m_listenSock = INVALID_SOCKET;
     std::atomic<bool> m_running{false};
     std::thread m_thread;
+
+    // 并发控制
+    static constexpr int kMaxConnections = 16;
+    int m_activeCount = 0;
+    std::mutex m_slotMutex;
 };
 
 #endif

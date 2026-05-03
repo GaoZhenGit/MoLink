@@ -16,7 +16,9 @@ add_executable(molink
     src/usb/usb_device.cpp
     src/adb/adb_transport.cpp
     src/adb/adb_rsa.cpp
+    src/adb/adb_reader.cpp
     src/adb/adb_client.cpp
+    src/cli/named_pipe.cpp
     src/forward/forwarder.cpp
 )
 

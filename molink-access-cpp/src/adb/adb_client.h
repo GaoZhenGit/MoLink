@@ -3,6 +3,7 @@
 
 #include "adb_transport.h"
 #include "adb_rsa.h"
+#include "adb_reader.h"
 #include "../usb/usb_device.h"
 #include <string>
 #include <vector>
@@ -21,12 +22,6 @@ public:
         int interfaceNumber;
     };
 
-    struct Channel {
-        uint32_t localId = 0;
-        uint32_t remoteId = 0;
-        bool valid() const { return remoteId != 0; }
-    };
-
     AdbClient();
     ~AdbClient();
 
@@ -40,21 +35,25 @@ public:
     std::string getSerial() const { return m_serial; }
 
     // 通道 I/O（线程安全）
-    Channel openChannel(const std::string& destination);
-    void closeChannel(const Channel& ch);
-    bool readChannel(const Channel& ch, std::vector<uint8_t>& data,
-                     uint32_t timeoutMs = 5000);
-    bool writeChannel(const Channel& ch, const void* data, uint32_t len);
+    ChannelPtr openChannel(const std::string& destination);
+    void closeChannel(ChannelPtr ch);
+    bool writeChannel(ChannelPtr ch, const void* data, uint32_t len);
 
-    // 底层 transport
-    AdbTransport* getTransport() { return m_transport.get(); }
+    // 线程安全
     std::mutex& getWriteMutex() { return m_writeMutex; }
 
+    // 状态查询
+    int getActiveChannelCount() const;
+
 private:
-    std::vector<UsbDevice> m_devices;       // 持有设备列表，保证指针有效
-    UsbDevice* m_selectedDev = nullptr;     // 当前使用的设备
+    std::vector<UsbDevice> m_devices;
+    UsbDevice* m_selectedDev = nullptr;
     std::unique_ptr<AdbTransport> m_transport;
     std::unique_ptr<AdbRsa> m_rsa;
+    AdbReader m_reader;
+    ChannelMap m_channels;
+    PendingMap m_pending;
+    mutable std::mutex m_channelMutex;
     std::string m_serial;
     bool m_connected = false;
     uint32_t m_nextLocalId = 1;

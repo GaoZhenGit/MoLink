@@ -6,12 +6,16 @@
 
 ```
 main.cpp
-  ├── AdbClient                          # 设备生命周期管理
-  │     ├── UsbDevice                    # libusb 封装（发现/打开/读写）
-  │     ├── AdbRsa                       # BCrypt RSA（密钥生成/导入/签名）
-  │     └── AdbTransport                 # ADB 协议（握手/通道/数据收发）
-  └── Forwarder（独立线程）               # TCP → ADB 转发
-        └── accept → relay（双向中继）
+  ├── 前台调试模式 (molink)
+  └── 后台守护进程 (molink start)
+        ├── NamedPipe Server (\\.\pipe\molink)  ← molink stop/status
+        ├── AdbClient                          # 设备生命周期
+        │     ├── UsbDevice                    # libusb 封装
+        │     ├── AdbRsa                       # BCrypt RSA
+        │     ├── AdbTransport                 # ADB 协议
+        │     └── AdbReader（独立线程）         # USB 读 + 消息分发
+        └── Forwarder（accept 线程 + 每连接 relay 线程）
+              └── 并发 relay (max 16): Channel queue + cv 等待
 ```
 
 ### 数据流
@@ -19,30 +23,40 @@ main.cpp
 ```
 应用 (curl --socks5 127.0.0.1:1080)
   → TCP localhost:1080 (Winsock2 accept)
-    → Forwarder relay (select + 50ms poll)
-      → AdbTransport: A_WRTE ↔ A_OKAY
-        → UsbDevice: libusb bulk read/write
-          → USB cable
-            → 设备 adbd → worker SOCKS5 → 互联网
+    → Forwarder relay thread (select + cv.wait_for)
+      → AdbClient::writeChannel (USB write mutex)
+        → UsbDevice: libusb bulk write
+      ← AdbReader: libusb bulk read → Channel::dataQueue → cv.notify
+          ↕ USB cable
+          → 设备 adbd → worker SOCKS5 → 互联网
 ```
 
-## 编译
+### 并发模型
 
-**环境要求：** MinGW-w64, CMake 3.14+, libusb-1.0
+```
+USB Read Thread (AdbReader, 唯一)
+  │ recv() 100ms 循环
+  ├── A_WRTE → push Channel[local_id].dataQueue → cv.notify
+  ├── A_OKAY → PendingOpen 分发 / 丢弃
+  └── A_CLSE → Channel.closed = true / PendingOpen error
 
-```powershell
-cd molink-access-cpp
-mkdir build && cd build
-cmake .. -G "MinGW Makefiles"
-mingw32-make
+Relay Thread × N (每 TCP 连接一个)
+  while:
+    select(clientSock, 100ms) → recv → writeChannel(mutex)
+    lock(ch.mtx)
+      dataQueue 有数据? → send to client
+      closed? → break
+      否则 → cv.wait_for(50ms)
 ```
 
-## 使用
+## 命令
 
 ```powershell
-.\molink.exe                           # 默认: 127.0.0.1:1080 → device:1081
-.\molink.exe -p 2080 -r 1081           # 自定义端口
-.\molink.exe -s 852QLDV923XMM           # 指定设备
+molink                          # 前台调试模式（Ctrl+C 退出）
+molink start   [options]        # 启动后台守护进程
+molink stop                     # 停止守护进程
+molink devices                  # 查询 USB ADB 设备列表
+molink status                   # 查询守护进程状态
 ```
 
 | 参数 | 简写 | 默认值 | 说明 |
@@ -50,13 +64,38 @@ mingw32-make
 | `--port` | `-p` | 1080 | 本地 TCP 端口 |
 | `--rport` | `-r` | 1081 | 设备目标端口 |
 | `--serial` | `-s` | (第一个设备) | 设备序列号 |
-| `--help` | `-h` | — | 显示帮助 |
 
-**代理测试：**
+## 编译
+
+MinGW-w64, CMake 3.14+, libusb-1.0
+
 ```powershell
-curl --socks5 127.0.0.1:1080 --proxy-user socks5:password123 https://www.baidu.com
-curl --socks5-hostname 127.0.0.1:1080 --proxy-user socks5:password123 https://www.baidu.com
+cd molink-access-cpp && mkdir build && cd build
+cmake .. -G "MinGW Makefiles"
+mingw32-make
 ```
+
+## 使用示例
+
+```powershell
+# 前台调试
+.\molink.exe -p 1080
+
+# 后台守护
+.\molink.exe start -p 1080
+curl --socks5 127.0.0.1:1080 --proxy-user socks5:password123 https://www.baidu.com
+.\molink.exe status
+.\molink.exe stop
+
+# 查询设备
+.\molink.exe devices
+```
+
+## 进程管理
+
+- **单实例锁**: `Global\MoLinkDaemon` Mutex，防止重复启动
+- **PID 文件**: `<exe_dir>\molinkd.pid`，用于 force kill
+- **Named Pipe**: `\\.\pipe\molink`，消息模式，支持 `stop` / `status` 命令
 
 ## 关键技术细节
 
@@ -66,7 +105,8 @@ curl --socks5-hostname 127.0.0.1:1080 --proxy-user socks5:password123 https://ww
 - **RSA 签名**：原始 20 字节 token 直接放入 PKCS#1 v1.5 DigestInfo，不做 SHA1
 - **BCrypt**：Windows CNG，`BCryptDecrypt(PAD_NONE)` 做裸 RSA 签名
 - **openChannel**：设备响应的 `msg.arg0` 是 remote_id（不是 arg1）
-- **closeChannel**：发送 A_CLSE 后须循环 recv 消耗残留消息直到收到设备 A_CLSE
+- **AdbReader**：唯一 USB 读线程，消息按 `local_id` 分发到 Channel 队列
+- **PendingOpen**：openChannel 不自己 recv，由 AdbReader 分发 A_OKAY 响应
 
 ## 密钥管理
 
@@ -88,18 +128,16 @@ molink-access-cpp/
 ├── vendor/libusb/
 │   └── libusb.h
 └── src/
-    ├── main.cpp                     # CLI 入口
+    ├── main.cpp                     # CLI 入口（多命令）
     ├── usb/
-    │   ├── usb_device.h             # libusb 封装
-    │   └── usb_device.cpp
+    │   ├── usb_device.h/cpp         # libusb 封装
     ├── adb/
-    │   ├── adb_transport.h          # ADB 协议
-    │   ├── adb_transport.cpp
-    │   ├── adb_rsa.h                # RSA 密钥
-    │   ├── adb_rsa.cpp
-    │   ├── adb_client.h             # 高层客户端
-    │   └── adb_client.cpp
+    │   ├── adb_transport.h/cpp      # ADB 协议（send/recv/handshake）
+    │   ├── adb_rsa.h/cpp            # RSA 密钥 + 签名
+    │   ├── adb_reader.h/cpp         # USB 读线程 + 消息分发
+    │   ├── adb_client.h/cpp         # 高层客户端 + ChannelMap
+    ├── cli/
+    │   ├── named_pipe.h/cpp         # Named Pipe Server
     └── forward/
-        ├── forwarder.h              # 端口转发
-        └── forwarder.cpp
+        ├── forwarder.h/cpp          # TCP 端口转发（多连接并发）
 ```
