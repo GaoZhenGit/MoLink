@@ -32,27 +32,10 @@ std::vector<UsbDevice> UsbDevice::discover() {
         int adb_iface = 0;
         uint8_t read_ep = 0, write_ep = 0;
 
-        // 打印设备详细信息
-        printf("USB: Device[%zd] VID=0x%04X PID=0x%04X class=%d sub=%d proto=%d\n",
-               i, desc.idVendor, desc.idProduct,
-               desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
-        printf("USB:   Configs=%d interfaces=%d\n",
-               desc.bNumConfigurations, config->bNumInterfaces);
-
         for (uint8_t j = 0; j < config->bNumInterfaces && !found; j++) {
             const libusb_interface& iface = config->interface[j];
             for (int k = 0; k < iface.num_altsetting && !found; k++) {
                 const libusb_interface_descriptor& iface_desc = iface.altsetting[k];
-                printf("USB:   Iface[%d].Alt[%d]: class=0x%02X sub=0x%02X proto=0x%02X eps=%d\n",
-                       j, k, iface_desc.bInterfaceClass,
-                       iface_desc.bInterfaceSubClass, iface_desc.bInterfaceProtocol,
-                       iface_desc.bNumEndpoints);
-                for (uint8_t ep = 0; ep < iface_desc.bNumEndpoints; ep++) {
-                    const libusb_endpoint_descriptor& ep_desc = iface_desc.endpoint[ep];
-                    printf("USB:     EP addr=0x%02X attr=%d maxpkt=%d interval=%d\n",
-                           ep_desc.bEndpointAddress, ep_desc.bmAttributes,
-                           ep_desc.wMaxPacketSize, ep_desc.bInterval);
-                }
                 if (iface_desc.bInterfaceClass == 0xFF &&
                     iface_desc.bInterfaceSubClass == 0x42 &&
                     iface_desc.bInterfaceProtocol == 0x01) {
@@ -99,28 +82,18 @@ UsbDevice::~UsbDevice() { close(); }
 bool UsbDevice::open() {
     if (m_open) return true;
 
-    // 打印设备路径（调试用）
-    uint8_t bus = libusb_get_bus_number(m_device);
-    uint8_t addr = libusb_get_device_address(m_device);
-    uint8_t port = libusb_get_port_number(m_device);
-    printf("USB: device bus=%d addr=%d port=%d\n", bus, addr, port);
-
     int ret = libusb_open(m_device, &m_handle);
     if (ret != 0) {
         printf("USB: libusb_open failed: %s\n", libusb_error_name(ret));
         return false;
     }
 
-    // 显式设置配置（与 adb.exe 的 SET_CONFIGURATION 一致）
     int config = 0;
-    ret = libusb_get_configuration(m_handle, &config);
-    printf("USB: current config=%d (ret=%d)\n", config, ret);
+    libusb_get_configuration(m_handle, &config);
     if (config != 1) {
         ret = libusb_set_configuration(m_handle, 1);
         if (ret != 0) {
             printf("USB: libusb_set_configuration(1) failed: %s\n", libusb_error_name(ret));
-        } else {
-            printf("USB: Configuration set to 1\n");
         }
     }
 
@@ -151,11 +124,9 @@ void UsbDevice::drainRead() {
     uint8_t buf[256];
     int got = 0;
     int drained = 0;
-    while (bulkRead(buf, sizeof(buf), &got, 200)) {
+    while (bulkRead(buf, sizeof(buf), &got, 200))
         drained += got;
-        printf("USB: drained %d bytes (stale data)\n", got);
-    }
-    if (drained > 0) printf("USB: total drained %d bytes\n", drained);
+    if (drained > 0) printf("USB: drained %d bytes stale data\n", drained);
 }
 
 bool UsbDevice::clearHalt(uint8_t ep) {
@@ -189,11 +160,11 @@ bool UsbDevice::bulkRead(void* buf, int len, int* transferred, int timeout_ms) {
                                    (unsigned char*)buf, len,
                                    transferred, timeout_ms);
     if (ret < 0) {
-        printf("USB: bulkRead(ep=0x%02X, len=%d) failed: %s\n",
-               m_read_ep, len, libusb_error_name(ret));
+        if (ret != LIBUSB_ERROR_TIMEOUT) {
+            printf("USB: bulkRead error: %s\n", libusb_error_name(ret));
+        }
         return false;
     }
-    printf("USB: bulkRead(ep=0x%02X) got %d bytes\n", m_read_ep, *transferred);
     return true;
 }
 
@@ -202,11 +173,9 @@ bool UsbDevice::bulkWrite(const void* buf, int len, int* transferred, int timeou
                                    (unsigned char*)buf, len,
                                    transferred, timeout_ms);
     if (ret < 0) {
-        printf("USB: bulkWrite(ep=0x%02X, len=%d) failed: %s\n",
-               m_write_ep, len, libusb_error_name(ret));
+        printf("USB: bulkWrite error: %s\n", libusb_error_name(ret));
         return false;
     }
-    printf("USB: bulkWrite(ep=0x%02X) sent %d bytes\n", m_write_ep, *transferred);
     return true;
 }
 

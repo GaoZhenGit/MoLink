@@ -12,10 +12,12 @@ include_directories(${CMAKE_SOURCE_DIR}/vendor/libusb)
 link_directories(${CMAKE_SOURCE_DIR}/libs)
 
 add_executable(molink
-    src/poc_main.cpp
+    src/main.cpp
     src/usb/usb_device.cpp
     src/adb/adb_transport.cpp
     src/adb/adb_rsa.cpp
+    src/adb/adb_client.cpp
+    src/forward/forwarder.cpp
 )
 
 target_link_libraries(molink libusb-1.0.dll.a ws2_32 bcrypt crypt32)

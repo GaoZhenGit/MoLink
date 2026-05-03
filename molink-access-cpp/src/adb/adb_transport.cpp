@@ -12,14 +12,9 @@ bool AdbTransport::readExact(void* buf, uint32_t len, uint32_t timeout_ms) {
     int remain = (int)len;
     while (remain > 0) {
         int bytes = 0;
-        if (!m_device.bulkRead(p, remain, &bytes, (int)timeout_ms)) {
-            printf("FAIL: bulk read\n");
+        if (!m_device.bulkRead(p, remain, &bytes, (int)timeout_ms))
             return false;
-        }
-        if (bytes == 0) {
-            printf("FAIL: bulk read returned 0 bytes\n");
-            return false;
-        }
+        if (bytes == 0) return false;
         p += bytes;
         remain -= bytes;
     }
@@ -31,10 +26,8 @@ bool AdbTransport::writeExact(const void* buf, uint32_t len, uint32_t timeout_ms
     int remain = (int)len;
     while (remain > 0) {
         int bytes = 0;
-        if (!m_device.bulkWrite(p, remain, &bytes, (int)timeout_ms)) {
-            printf("FAIL: bulk write\n");
+        if (!m_device.bulkWrite(p, remain, &bytes, (int)timeout_ms))
             return false;
-        }
         p += bytes;
         remain -= bytes;
     }
@@ -51,23 +44,15 @@ bool AdbTransport::send(uint32_t cmd, uint32_t arg0, uint32_t arg1,
     }
     AdbMessage msg(cmd, arg0, arg1, data_len, sum);
 
-    printf("ADB SEND: cmd=0x%08X arg0=%u arg1=%u len=%u sum=%u magic=0x%08X\n",
-           cmd, arg0, arg1, data_len, sum, msg.magic);
-
-    // 先发送 header（24 字节）— 魅族设备要求分开传输
     if (!writeExact(&msg, sizeof(msg), 5000)) {
         printf("FAIL: send header\n");
         return false;
     }
-    printf("ADB SEND: header OK (24 bytes)\n");
-
-    // 再发送 data
     if (data && data_len > 0) {
         if (!writeExact(data, data_len, 5000)) {
             printf("FAIL: send data\n");
             return false;
         }
-        printf("ADB SEND: data OK (%u bytes)\n", data_len);
     }
     return true;
 }
@@ -76,14 +61,8 @@ bool AdbTransport::recv(AdbMessage& msg, std::vector<uint8_t>& data,
                          uint32_t timeout_ms) {
     data.clear();
 
-    printf("ADB RECV: waiting for header (%u ms)...\n", timeout_ms);
-    if (!readExact(&msg, sizeof(msg), timeout_ms)) {
-        printf("FAIL: recv header\n");
+    if (!readExact(&msg, sizeof(msg), timeout_ms))
         return false;
-    }
-
-    printf("ADB RECV: cmd=0x%08X arg0=%u arg1=%u len=%u sum=%u magic=0x%08X\n",
-           msg.command, msg.arg0, msg.arg1, msg.data_length, msg.data_crc32, msg.magic);
 
     if (msg.magic != (msg.command ^ 0xFFFFFFFF)) {
         printf("FAIL: bad magic, got 0x%08X expect 0x%08X\n",
@@ -254,5 +233,12 @@ bool AdbTransport::readChannel(uint32_t local_id, uint32_t remote_id,
 
 void AdbTransport::closeChannel(uint32_t local_id, uint32_t remote_id) {
     send(A_CLSE, local_id, remote_id, nullptr, 0);
+    // 消耗该通道的所有残留消息（A_WRTE/A_OKAY），直到收到 A_CLSE
+    for (int i = 0; i < 5; i++) {
+        AdbMessage msg;
+        std::vector<uint8_t> data;
+        if (!recv(msg, data, 500)) break;
+        if (msg.command == A_CLSE) break;
+    }
     printf("ADB: Channel %u/%u closed\n", local_id, remote_id);
 }
