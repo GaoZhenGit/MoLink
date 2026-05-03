@@ -77,6 +77,8 @@ void Forwarder::runLoop() {
 
         relay(clientSock);
         closesocket(clientSock);
+        // 给设备 worker 时间重置，避免快速重连被拒绝
+        Sleep(300);
     }
 }
 

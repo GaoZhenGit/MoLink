@@ -233,12 +233,11 @@ bool AdbTransport::readChannel(uint32_t local_id, uint32_t remote_id,
 
 void AdbTransport::closeChannel(uint32_t local_id, uint32_t remote_id) {
     send(A_CLSE, local_id, remote_id, nullptr, 0);
-    // 消耗该通道的所有残留消息（A_WRTE/A_OKAY），直到收到 A_CLSE
+    // 循环 recv 直到超时，确保所有残留消息（A_WRTE/A_OKAY/A_CLSE）被清空
     for (int i = 0; i < 5; i++) {
         AdbMessage msg;
         std::vector<uint8_t> data;
-        if (!recv(msg, data, 500)) break;
-        if (msg.command == A_CLSE) break;
+        if (!recv(msg, data, 200)) break;
     }
     printf("ADB: Channel %u/%u closed\n", local_id, remote_id);
 }
