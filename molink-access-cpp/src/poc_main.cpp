@@ -1,6 +1,8 @@
 #include <cstdio>
+#include <cstring>
 #include <vector>
 #include <string>
+#include <winsock2.h>
 #include <windows.h>
 #include <shlobj.h>
 #include "usb/usb_device.h"
@@ -92,12 +94,79 @@ int main() {
             printf("Handshake: CONNECTED!\n");
             connected = true;
 
-            printf("\n--- Step 7: Open Channel ---\n");
-            uint32_t remote_id = transport.openChannel("tcp:1080", 1);
-            if (remote_id > 0) {
-                printf("OK: Channel to tcp:1080 opened! remote_id=%u\n", remote_id);
-                transport.closeChannel(1, remote_id);
+            // --- Forward Mode: 本地 TCP → ADB 通道 → 设备 SOCKS5 ---
+            printf("\n--- Step 7: Forward Mode ---\n");
+
+            WSADATA wsa;
+            WSAStartup(MAKEWORD(2, 2), &wsa);
+
+            SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, 0);
+            sockaddr_in addr = {};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+            addr.sin_port = htons(1080);
+            bind(listen_sock, (sockaddr*)&addr, sizeof(addr));
+            listen(listen_sock, 1);
+            printf("Forward: Listening on 127.0.0.1:1080\n");
+            printf("Forward: Run: curl --socks5 127.0.0.1:1080 --proxy-user socks5:password123 http://example.com\n");
+
+            SOCKET client = accept(listen_sock, nullptr, nullptr);
+            if (client == INVALID_SOCKET) {
+                printf("Forward: Accept failed: %d\n", WSAGetLastError());
+                closesocket(listen_sock);
+                WSACleanup();
+                break;
             }
+            printf("Forward: Client connected\n");
+
+            uint32_t remote_id = transport.openChannel("tcp:1081", 1);
+            if (remote_id == 0) {
+                printf("Forward: Cannot open ADB channel\n");
+                closesocket(client);
+                closesocket(listen_sock);
+                WSACleanup();
+                break;
+            }
+            printf("Forward: ADB channel to tcp:1081 opened (remote_id=%u)\n", remote_id);
+
+            // 双向转发: select 监听本地 socket → ADB, poll ADB → 本地
+            printf("Forward: Starting data relay...\n");
+            bool fwd_running = true;
+            while (fwd_running) {
+                fd_set fds;
+                FD_ZERO(&fds);
+                FD_SET(client, &fds);
+                timeval tv = {0, 100000}; // 100ms
+                int sel_ret = select(0, &fds, nullptr, nullptr, &tv);
+
+                // 本地 → ADB
+                if (sel_ret > 0 && FD_ISSET(client, &fds)) {
+                    char buf[8192];
+                    int n = recv(client, buf, sizeof(buf), 0);
+                    if (n > 0) {
+                        printf("FWD: local→ADB %d bytes\n", n);
+                        if (!transport.writeChannel(1, remote_id, buf, n)) {
+                            printf("FWD: ADB write failed\n");
+                            break;
+                        }
+                    } else {
+                        printf("FWD: Client disconnected (%d)\n", n);
+                        break;
+                    }
+                }
+
+                // ADB → 本地
+                std::vector<uint8_t> adb_data;
+                if (transport.readChannel(1, remote_id, adb_data, 50)) {
+                    printf("FWD: ADB→local %zu bytes\n", adb_data.size());
+                    send(client, (char*)adb_data.data(), adb_data.size(), 0);
+                }
+            }
+
+            transport.closeChannel(1, remote_id);
+            closesocket(client);
+            closesocket(listen_sock);
+            WSACleanup();
             break;
         }
 

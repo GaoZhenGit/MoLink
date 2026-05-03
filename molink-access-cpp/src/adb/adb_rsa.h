@@ -26,7 +26,6 @@ public:
 private:
     BCRYPT_KEY_HANDLE m_key;
     BCRYPT_ALG_HANDLE m_alg;
-    bool m_isNcrypt = false;
     std::vector<uint8_t> m_cachedModulus;  // 256 bytes BE
     std::vector<uint8_t> m_cachedExp;      // 4 bytes BE
 

@@ -3,20 +3,15 @@
 #include <cstring>
 #include <algorithm>
 #include <shlobj.h>
-#include <ncrypt.h>
 
 #pragma comment(lib, "bcrypt.lib")
-#pragma comment(lib, "ncrypt.lib")
 #pragma comment(lib, "crypt32.lib")
 
 AdbRsa::AdbRsa() : m_key(nullptr), m_alg(nullptr) {}
 
 AdbRsa::~AdbRsa() {
     if (m_key) {
-        if (m_isNcrypt)
-            NCryptFreeObject((NCRYPT_KEY_HANDLE)m_key);
-        else
-            BCryptDestroyKey(m_key);
+        BCryptDestroyKey(m_key);
         m_key = nullptr;
     }
     if (m_alg) {
@@ -34,7 +29,6 @@ bool AdbRsa::generateKey() {
         BCryptDestroyKey(m_key);
         m_key = nullptr;
     }
-    m_isNcrypt = false;
     m_cachedModulus.clear();
     m_cachedExp.clear();
 
@@ -269,7 +263,6 @@ bool AdbRsa::loadPkcs8(const std::string& path) {
     // 清理旧密钥
     if (m_key) { BCryptDestroyKey(m_key); m_key = nullptr; }
     if (m_alg) { BCryptCloseAlgorithmProvider(m_alg, 0); m_alg = nullptr; }
-    m_isNcrypt = false;
 
     NTSTATUS status = BCryptOpenAlgorithmProvider(&m_alg, BCRYPT_RSA_ALGORITHM, nullptr, 0);
     if (status != 0) {
@@ -326,60 +319,44 @@ std::vector<uint8_t> AdbRsa::signToken(const uint8_t* token, size_t token_len) {
         return {};
     }
 
-    auto hash = sha1(token, token_len);
-
-    if (m_isNcrypt) {
-        // NCrypt 导入的密钥：使用 NCryptSignHash
-        BCRYPT_PKCS1_PADDING_INFO paddingInfo;
-        paddingInfo.pszAlgId = NCRYPT_SHA1_ALGORITHM;
-
-        ULONG sigSize = 0;
-        SECURITY_STATUS status = NCryptSignHash((NCRYPT_KEY_HANDLE)m_key, &paddingInfo,
-                                                 hash.data(), (ULONG)hash.size(),
-                                                 nullptr, 0, &sigSize,
-                                                 BCRYPT_PAD_PKCS1);
-        if (status != 0) {
-            printf("RSA: NCryptSignHash size query failed: 0x%08X\n", (unsigned)status);
-            return {};
-        }
-
-        std::vector<uint8_t> sig(sigSize);
-        status = NCryptSignHash((NCRYPT_KEY_HANDLE)m_key, &paddingInfo,
-                                 hash.data(), (ULONG)hash.size(),
-                                 sig.data(), sigSize, &sigSize,
-                                 BCRYPT_PAD_PKCS1);
-        if (status != 0) {
-            printf("RSA: NCryptSignHash failed: 0x%08X\n", (unsigned)status);
-            return {};
-        }
-        printf("RSA: NCrypt signed token -> signature (%lu bytes)\n", sigSize);
-        return sig;
-    }
-
-    // BCrypt 密钥：使用标准 BCryptSignHash (SHA-1)
-    BCRYPT_PKCS1_PADDING_INFO paddingInfo;
-    paddingInfo.pszAlgId = BCRYPT_SHA1_ALGORITHM;
-
-    ULONG sigSize = 0;
-    NTSTATUS status = BCryptSignHash(m_key, &paddingInfo,
-                                      hash.data(), (ULONG)hash.size(),
-                                      nullptr, 0, &sigSize,
-                                      BCRYPT_PAD_PKCS1);
-    if (status != 0) {
-        printf("RSA: BCryptSignHash size query failed: 0x%08X\n", (unsigned)status);
+    if (token_len != 20) {
+        printf("RSA: Expected 20-byte token, got %zu\n", token_len);
         return {};
     }
 
-    std::vector<uint8_t> sig(sigSize);
-    status = BCryptSignHash(m_key, &paddingInfo,
-                             hash.data(), (ULONG)hash.size(),
-                             sig.data(), sigSize, &sigSize,
-                             BCRYPT_PAD_PKCS1);
+    // ADB 把原始 20 字节 token 直接放入 DigestInfo，不是 SHA1(token)。
+    // 手动构建 PKCS#1 v1.5 填充块，再用 BCryptDecrypt(PAD_NONE) 裸 RSA 签名。
+    // Block: 00 01 FF...FF 00 <DigestInfo>
+    // DigestInfo: 30 21 30 09 06 05 2B 0E 03 02 1A 05 00 04 14 <20 bytes token>
+
+    const int kModBytes = 256;
+    const uint8_t kDigestInfo[] = {
+        0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E,
+        0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14
+    };
+    const int kDIHeader = sizeof(kDigestInfo); // 15
+
+    std::vector<uint8_t> padded(kModBytes, 0xFF);
+    padded[0] = 0x00;
+    padded[1] = 0x01;
+
+    int di_start = kModBytes - 1 - kDIHeader - (int)token_len;
+    padded[di_start] = 0x00;
+    memcpy(&padded[di_start + 1], kDigestInfo, kDIHeader);
+    memcpy(&padded[di_start + 1 + kDIHeader], token, token_len);
+
+    std::vector<uint8_t> sig(kModBytes);
+    ULONG sigSize = kModBytes;
+    NTSTATUS status = BCryptDecrypt(m_key, padded.data(), kModBytes,
+                                     nullptr, nullptr, 0,
+                                     sig.data(), sigSize, &sigSize,
+                                     BCRYPT_PAD_NONE);
     if (status != 0) {
-        printf("RSA: BCryptSignHash failed: 0x%08X\n", (unsigned)status);
+        printf("RSA: BCryptDecrypt (raw PKCS#1 v1.5) failed: 0x%08X\n", (unsigned)status);
         return {};
     }
-    printf("RSA: BCryptSignHash -> signature (%lu bytes)\n", sigSize);
+
+    printf("RSA: Token signed via raw PKCS#1 v1.5 (%lu bytes)\n", sigSize);
     return sig;
 }
 
@@ -389,11 +366,7 @@ std::vector<uint8_t> AdbRsa::getPublicKey(const std::string& user) {
     std::vector<uint8_t> pubExp;
     std::vector<uint8_t> modulus;
 
-    if (m_isNcrypt && !m_cachedModulus.empty()) {
-        // 使用缓存的公钥参数（NCrypt 不支持 BCryptExportKey）
-        pubExp = m_cachedExp;
-        modulus = m_cachedModulus;
-    } else {
+    {
         // Export public key blob from CNG
         ULONG blobSize = 0;
         NTSTATUS status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
@@ -803,7 +776,7 @@ std::string AdbRsa::getPubKeyPayload() {
     }
 
     // 如果缓存为空（从旧文件加载的 BCrypt key），尝试导出公钥参数
-    if (m_cachedModulus.empty() && !m_isNcrypt) {
+    if (m_cachedModulus.empty()) {
         ULONG blobSize = 0;
         NTSTATUS status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
                                            nullptr, 0, &blobSize, 0);

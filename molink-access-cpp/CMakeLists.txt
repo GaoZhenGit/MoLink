@@ -18,7 +18,7 @@ add_executable(molink
     src/adb/adb_rsa.cpp
 )
 
-target_link_libraries(molink libusb-1.0.dll.a ws2_32 bcrypt ncrypt crypt32)
+target_link_libraries(molink libusb-1.0.dll.a ws2_32 bcrypt crypt32)
 
 # 构建后复制 libusb DLL 到输出目录
 add_custom_command(TARGET molink POST_BUILD

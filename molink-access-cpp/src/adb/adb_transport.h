@@ -51,6 +51,10 @@ public:
     bool handshake(AdbRsa& rsa, const std::string& banner = "host::");
 
     uint32_t openChannel(const std::string& destination, uint32_t local_id);
+    bool writeChannel(uint32_t local_id, uint32_t remote_id,
+                      const void* data, uint32_t len);
+    bool readChannel(uint32_t local_id, uint32_t remote_id,
+                     std::vector<uint8_t>& data, uint32_t timeout_ms = 5000);
     void closeChannel(uint32_t local_id, uint32_t remote_id);
 
     const std::vector<uint8_t>& getAuthToken() const { return m_auth_token; }

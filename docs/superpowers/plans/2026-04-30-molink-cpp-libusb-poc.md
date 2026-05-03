@@ -927,178 +927,260 @@ USB: Hint: Use Zadig to replace driver of ADB interface with WinUSB
 
 如果设备需要 RSA 认证且收到 A_AUTH token，也被视为第 4 步通过——因为这说明 USB 读写通道已打通，只是缺少 RSA 签名。
 
+
+## POC 结论 — 2026-05-03 最终版
+
+**POC 全部通过。** 自实现 ADB 协议栈（libusb + BCrypt RSA）完成设备发现→握手→转发全链路，等价 `adb forward` 功能。以下为正式开发的参考文档。
+
 ---
 
-## 执行顺序
+## 验证通过的完整架构
 
 ```
-Task 1（下载libusb+项目骨架）
-  → Task 2（设备发现）
-    → Task 3（打开/读写/序列号）
-      → Task 4（改造 AdbTransport）
-        → Task 5（重写 poc_main）
-          → Task 6（运行测试）
+curl --socks5 127.0.0.1:1080
+  → TCP localhost:1080 (Winsock2 accept)
+    → Forward Loop (select + 50ms poll)
+      → AdbTransport: A_WRTE ↔ A_OKAY relay
+        → UsbDevice: libusb bulk read/write
+          → USB cable
+            → 设备 adbd → worker SOCKS5 (tcp:1081) → 互联网
+
+实测: curl --socks5[-hostname] https://www.baidu.com → HTTP 200, ~0.7s
+```
+
+**已授权握手（免弹窗）：**
+```
+host → A_CNXN →
+            ← A_AUTH(TOKEN, 20 bytes)
+host → AUTH_SIGNATURE →
+            ← A_CNXN (直连，不弹窗)
+```
+
+**首次授权：**
+```
+A_CNXN → TOKEN → SIGNATURE → TOKEN → RSAPUBLICKEY → 弹窗"允许" → CNXN
+```
 
 ---
 
-## 当前状态 (2026-05-03) — 魅族设备 POC 已完成
+## 核心协议细节（带代码参考）
 
-**POC 核心目标全部达成。** USB 通信 + ADB 协议 + RSA 认证握手全部打通。通过两次 Wireshark 抓包分析 adb.exe 的正常通信流程：
+### 1. 校验和：字节求和，非 CRC32
 
-- `docs/mezu.pcapng` — 基础握手流程（校验和、header/data 分离等）
-- `docs/mezu-auth.pcapng` — 完整首次授权握手（AUTH_RSAPUBLICKEY 流程）
+```cpp
+// adb_transport.h
+static uint32_t checksum(const uint8_t* data, uint32_t len) {
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < len; i++) sum += data[i];
+    return sum;
+}
+```
 
+### 2. Header(24B) 和 Data 必须分开两次 USB bulk write
 
-### 关键发现
+魅族设备要求 ADB header 和 payload 作为两次独立 `libusb_bulk_transfer`，不能合并。
 
-#### 1. ADB 校验和 = 字节求和，不是 CRC32
+```cpp
+// adb_transport.cpp — send()
+if (!writeExact(&msg, sizeof(msg), 5000)) return false;  // header
+if (data && data_len > 0) {
+    if (!writeExact(data, data_len, 5000)) return false;  // payload
+}
+```
 
-adb.exe 的 `data_check` 字段是**简单的字节求和**（`sum(data_bytes)`），而非标准 CRC32。之前的分析认为"libusb/AdbWinApi/WinUSB 三位一体，Bulk Read 始终超时"——根本原因就是校验算法错误，设备丢弃了所有校验和不匹配的消息。
+### 3. Banner 不含 NUL 终止符
 
-pcap 验证：
-- A_CNXN banner (234 bytes): 字节和 = 0x5B44 → header 中的 `data_check` = 0x00005B44 ✅
-- AUTH_SIGNATURE (256 bytes): 字节和 = 0x7B70 → header 中的 `data_check` = 0x00007B70 ✅
+```cpp
+// data_length = banner.size()，不要 +1
+send(A_CNXN, A_VERSION, maxdata, banner.c_str(), (uint32_t)banner.size());
+```
 
-#### 2. Header 和 Data 必须分开传输
+### 4. RSA 签名：原始 token 不哈希 ⚠️ 最关键发现
 
-adb.exe 将 ADB header(24B) 和 data 作为**两次独立的 USB bulk write**。之前的代码合并成一次写入，魅族设备不响应。
+adb.exe 将设备发来的 20 字节 token **直接**放入 PKCS#1 v1.5 DigestInfo 的 OCTET STRING，**不做 SHA1 哈希**。
 
-#### 3. Banner 不含 null 终止符
+```
+PKCS#1 v1.5 填充块 (256 bytes):
+  00 01 FF FF ... FF 00 <DigestInfo: 35 bytes>
 
-adb.exe 的 A_CNXN data_length=234 正好等于 banner 字符串长度，不包含 NUL 终止符。之前用 `banner.size() + 1` 多发了 1 字节。
+DigestInfo (35 bytes):
+  30 21          SEQUENCE (33 bytes)
+  30 09          SEQUENCE (9 bytes)
+  06 05 2B 0E 03 02 1A   OID 1.3.14.3.2.26 (SHA-1)
+  05 00          NULL
+  04 14          OCTET STRING (20 bytes)
+  <原始 20 字节 token>    ← 不是 SHA1(token)！
+```
 
-#### 4. 根因纠错
+参考实现：`src/adb/adb_rsa.cpp → signToken()`：
+```cpp
+const uint8_t kDigestInfo[] = {
+    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E,
+    0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14
+};
+// 构建 256 字节填充块
+std::vector<uint8_t> padded(256, 0xFF);
+padded[0] = 0x00; padded[1] = 0x01;
+int di_start = 256 - 1 - 15 - 20; // = 220
+padded[di_start] = 0x00; // 分隔符
+memcpy(&padded[di_start+1], kDigestInfo, 15);
+memcpy(&padded[di_start+1+15], token, 20); // 原始 token
 
-之前的分析认为"魅族 adbd 做了定制化修改，需要 OEM 握手"——这是**错误的**。抓包证实 adb.exe 与魅族设备通信使用的是**完全标准的 ADB 协议**，问题纯粹出在我们的实现上（校验和 + header/data 合并 + banner 格式）。
+// 裸 RSA 私钥操作 → 签名
+BCryptDecrypt(m_key, padded, 256, nullptr, nullptr, 0,
+              sig, 256, &sigSize, BCRYPT_PAD_NONE);
+```
 
-### 魅族设备信息 (不变)
+### 5. AUTH_RSAPUBLICKEY 格式
+
+720 字节，无长度前缀：
+```
+base64(RSAPublicKey 524字节) + " " + user@host + '\0'
+```
+
+RSAPublicKey 结构（524 bytes, Little-Endian）：
+```
+uint32_t key_size;     // 64 (32-bit word count)
+uint32_t n0inv;        // -n[0]⁻¹ mod 2^32 (Montgomery inverse)
+uint32_t modulus[64];  // n, LE uint32 words
+uint32_t rr[64];       // 2⁴⁰⁹⁶ mod n (Montgomery R²)
+uint32_t exponent;     // e, LE uint32
+```
+
+n0inv 公式：`n0inv = -modinv(n[0], 2^32)`，Newton 迭代 5 轮：
+```cpp
+static uint32_t modinv32(uint32_t a) {
+    uint32_t x = 1;
+    for (int i = 0; i < 5; i++) x = x * (2 - a * x);
+    return (uint32_t)(-(int32_t)x);
+}
+```
+
+rr 计算：先 `r = 2^2048 - n`，然后加倍 2048 次，每次 >= n 时减 n。
+
+参考实现：`src/adb/adb_rsa.cpp → buildRsaPublicKey()`
+
+### 6. openChannel 返回 msg.arg0 ⚠️
+
+设备响应 `A_OPEN` 时：
+- `arg0` = 设备分配的通道 ID（= remote_id）
+- `arg1` = 我们的 local_id（回显）
+
+```cpp
+// adb_transport.cpp — openChannel()
+// 正确: return msg.arg0;
+// 错误: return msg.arg1;  // 会导致后续 A_WRTE 发往错误的 remote_id
+```
+
+### 7. 通道双向转发
+
+参考实现：`src/adb/adb_transport.cpp → readChannel()` + `src/poc_main.cpp` 转发循环
+
+```cpp
+// readChannel: 循环跳过 A_OKAY，收到 A_WRTE 后回 A_OKAY
+bool AdbTransport::readChannel(uint32_t local_id, uint32_t remote_id,
+                               std::vector<uint8_t>& data, uint32_t timeout_ms) {
+    while (true) {
+        AdbMessage msg;
+        if (!recv(msg, data, timeout_ms)) return false;
+        if (msg.command == A_CLSE) { data.clear(); return false; }
+        if (msg.command == A_OKAY) continue;  // skip ack
+        if (msg.command != A_WRTE) return false;
+        send(A_OKAY, local_id, remote_id, nullptr, 0);  // ack back
+        return true;
+    }
+}
+
+// 转发主循环: select(100ms) + ADB poll(50ms)
+while (running) {
+    fd_set fds; FD_ZERO(&fds); FD_SET(client, &fds);
+    timeval tv = {0, 100000};
+    if (select(0, &fds, nullptr, nullptr, &tv) > 0) {
+        char buf[8192]; int n = recv(client, buf, sizeof(buf), 0);
+        if (n > 0) transport.writeChannel(1, remote_id, buf, n);
+        else break;
+    }
+    std::vector<uint8_t> adb_data;
+    if (transport.readChannel(1, remote_id, adb_data, 50))
+        send(client, adb_data.data(), adb_data.size(), 0);
+}
+```
+
+---
+
+## 踩坑记录
+
+| # | 现象 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | Bulk read 始终超时 | 校验和用了 CRC32，设备校验失败后丢包 | 改为字节求和 `sum(data_bytes)` |
+| 2 | 设备不响应握手 | header+data 合并为单次 USB write | 分两次独立 write |
+| 3 | 每次连接都弹授权窗 | `sha1(token)` ≠ 原始 token，签名不匹配 | 原始 token 直接放入 DigestInfo |
+| 4 | A_WRTE 后设备无响应 | openChannel 返回 `msg.arg1`（自己ID）而非 `msg.arg0`（设备ID） | 改为 `msg.arg0` |
+
+---
+
+## 密钥管理
+
+```
+加载优先级:
+  1. %USERPROFILE%\.android\molink_key.bin  (BCrypt blob, 自生成)
+  2. %USERPROFILE%\.android\adbkey           (PKCS#8 PEM → DER → BCryptImportKeyPair)
+
+AUTH_RSAPUBLICKEY 公钥来源:
+  优先: %USERPROFILE%\.android\adbkey.pub (adb 已授权，免弹窗)
+  回退: 从密钥参数自建 RSAPublicKey 结构体 (需要设备弹窗授权)
+```
+
+`loadPkcs8()` 参考实现：`src/adb/adb_rsa.cpp` - 从 adbkey 的 PKCS#8 DER 提取 n, e, d, p, q, dp, dq, qinv，组装 `BCRYPT_RSAFULLPRIVATE_BLOB`，`BCryptImportKeyPair` 导入。
+
+---
+
+## 设备信息
 
 | 项目 | 值 |
 |------|-----|
+| 型号 | 魅族 M1852 (Flyme OS) |
 | VID/PID | 0x2A45 / 0x4EE7 |
-| ADB 接口 | class=0xFF, subclass=0x42, protocol=0x01（标准 ADB）|
+| ADB 接口 | class=0xFF, subclass=0x42, protocol=0x01 |
 | 端点 | read_ep=0x81, write_ep=0x01, maxpkt=512 |
 | 序列号 | 852QLDV923XMM |
-| 系统 | Flyme OS（魅族定制 Android）|
 
-### 已完成 ✅
+---
 
-| 步骤 | 状态 | 备注 |
-|------|------|------|
-| 设备发现 | ✅ | libusb VID/PID 匹配 |
-| 设备打开 | ✅ | libusb_open + claim_interface |
-| clearHalt + drainRead | ✅ | 模拟 adb.exe 的 ABORT_PIPE + RESET_PIPE |
-| 序列号获取 | ✅ | libusb_get_string_descriptor_ascii |
-| ADB A_CNXN 发送 | ✅ | header/data 分开传输，字节求和校验 |
-| 接收 A_AUTH TOKEN | ✅ | 设备正常返回 20 字节 token |
-| RSA 签名 | ✅ | 手动 PKCS#1 v1.5 填充 + BCryptDecrypt 裸 RSA |
-| 发送 AUTH_SIGNATURE | ✅ | 字节求和校验 |
-| AUTH_RSAPUBLICKEY | ✅ | base64(RSAPublicKey 524B) + " " + user@host + null |
-| 设备授权弹窗 | ✅ | 用户点击"允许"后设备响应 CNXN |
-| 打开 TCP 通道 | ✅ | A_OPEN → 设备返回 CLSE（worker 未启动，预期行为） |
-
-### 关键发现 (2026-05-02 补充)
-
-#### 4. AUTH_RSAPUBLICKEY 格式：base64 文本，非原始二进制
-
-adb.exe 的 AUTH_RSAPUBLICKEY 数据格式（720 字节）：
-```
-base64_encode(RSAPublicKey 结构体 524 字节) + " " + user@host + '\0'
-```
-**没有 4 字节长度前缀！** 原始实现错误地加了 LE 长度前缀 + 原始二进制公钥。
-
-RSAPublicKey 结构体（524 字节）：
-```
-uint32_t key_size;   // 64 (2048-bit key 的 32-bit word 数)
-uint32_t n0inv;      // -1/n[0] mod 2^32 (Montgomery 逆)
-uint32_t modulus[64]; // n 的 64 个 LE uint32 words
-uint32_t rr[64];     // R^2 mod n = 2^4096 mod n (Montgomery R^2)
-uint32_t exponent;   // 公钥指数 (LE uint32)
-```
-
-- `n0inv` 计算：Newton 迭代法求模 2^32 逆元，再取负
-- `rr` 计算：2^4096 mod n，通过 2048 次「加倍 + 条件减 n」实现
-- 通过 adbkey.pub 的已知数据验证：n0*n0inv ≡ -1 (mod 2^32) ✅
-
-#### 5. NCryptSignHash 产生错误签名
-
-Windows NCryptSignHash 产生的 PKCS#1 v1.5 签名与 OpenSSL/BoringSSL 不一致，导致设备验证失败。
-
-**解决方案**：手动构建 PKCS#1 v1.5 填充块（0x00 0x01 0xFF...0x00 + SHA-1 DigestInfo），然后用 `BCryptDecrypt` + `BCRYPT_PAD_NONE` 做裸 RSA 私钥操作得到签名。
-
-SHA-1 DigestInfo 前缀：
-```
-30 21 30 09 06 05 2B 0E 03 02 1A 05 00 04 14
-```
-
-#### 6. 设备授权流程
-
-握手完整流程：
-```
-A_CNXN → A_AUTH(TOKEN) → AUTH_SIGNATURE → A_AUTH(TOKEN, 要公钥)
-→ AUTH_RSAPUBLICKEY → (设备弹授权对话框，用户点允许) → A_CNXN(成功!)
-```
-
-设备会弹出「允许 USB 调试」对话框，用户授权后立即响应 A_CNXN，连接成功。
-
-### 待解决 ⏳
-
-| 步骤 | 状态 | 备注 |
-|------|------|------|
-| 签名免弹窗 | ⏳ | BCryptSignHash 签名不能被魅族 adbd 验证，每次需 RSAPUBLICKEY+弹窗。疑为 DigestInfo 中 AlgorithmIdentifier 的 NULL 参数格式不一致（`30 09...05 00` vs `30 07...`），需手动控制 PKCS#1 填充 |
-| 自动重连 | ⏳ | 连接断开后自动恢复 |
-
-### 明日攻坚方向
-
-**根因推测**：BCryptSignHash 在 DigestInfo 中 SHA-1 的 AlgorithmIdentifier 可能不带 NULL 参数（`30 07`），而魅族 adbd 期望带 NULL（`30 09`）。这会导致签名完全不同，设备无法验证。
-
-**方案**：手动构建带 NULL 的 PKCS#1 v1.5 填充块 + `BCryptDecrypt(BCRYPT_PAD_NONE)` 裸 RSA。已验证手动 PKCS#1 可工作（第一天测试确认），只需确认 DigestInfo 格式。
-
-### 当前架构总结
+## 文件结构 & 编译
 
 ```
-poc_main → UsbDevice(libusb) → AdbTransport(ADB 协议) → AdbRsa(BCrypt)
-         ├─ discover/打开/序列号
-         ├─ 握手: CNXN → TOKEN → SIGNATURE → TOKEN → RSAPUBLICKEY → CNXN
-         └─ 通道: A_OPEN → A_CLSE (worker 未启动)
+molink-access-cpp/
+├── CMakeLists.txt           # 链接: libusb-1.0.dll.a ws2_32 bcrypt crypt32
+├── libs/libusb-1.0.dll
+├── vendor/libusb/libusb.h
+└── src/
+    ├── poc_main.cpp         # 入口: discover→open→handshake→forward
+    ├── usb/
+    │   ├── usb_device.h     # libusb 封装 (discover/open/read/write/clearHalt/drainRead)
+    │   └── usb_device.cpp
+    └── adb/
+        ├── adb_transport.h  # ADB 协议常量 + AdbMessage + send/recv/通道读写
+        ├── adb_transport.cpp
+        ├── adb_rsa.h        # RSA 密钥生成/导入/签名/公钥
+        └── adb_rsa.cpp
 ```
-
-密钥来源：`%USERPROFILE%\.android\adbkey`（PKCS#8 PEM → DER 解析 → BCrypt blob 导入）
-公钥来源：`%USERPROFILE%\.android\adbkey.pub`（base64 + user@host，直接复用）
-
-### 新增/修改文件
-
-| 文件 | 变更 |
-|------|------|
-| `src/adb/adb_transport.h` | A_VERSION → 0x01000001, MAX_PAYLOAD_V2 → 1MB, checksum() 替换 crc32() |
-| `src/adb/adb_transport.cpp` | send() header/data 分开写; handshake() 先 SIGNATURE 再 RSAPUBLICKEY; 移除 crc32() |
-| `src/usb/usb_device.h` | 新增 clearHalt(), drainRead() |
-| `src/usb/usb_device.cpp` | clearHalt()/drainRead() 实现; open() detach_kernel_driver |
-| `src/adb/adb_rsa.h` | 新增 getPubKeyPayload(), base64Encode(), buildRsaPublicKey(), readAdbPubKey() |
-| `src/adb/adb_rsa.cpp` | **手动 PKCS#1 v1.5 签名** (BCryptDecrypt + BCRYPT_PAD_NONE); **RSAPublicKey 构建** (n0inv + rr 计算); base64Encode(); 读取 adbkey.pub; loadPkcs8() 移除 NCRYPT_DO_NOT_FINALIZE_FLAG |
-| `src/poc_main.cpp` | BCrypt 生成密钥 (绕过 NCrypt 签名问题); fullBanner |
-| `CMakeLists.txt` | 移除硬编码工具路径; 新增 bcrypt, ncrypt, crypt32 |
-
-### 编译
-
-工具链已全部加入 PATH（MinGW64, CMake, mingw32-make）。
 
 ```powershell
-cd D:\MyProjects\MoLink\molink-access-cpp
-mkdir build && cd build
+cd molink-access-cpp && mkdir build && cd build
 cmake .. -G "MinGW Makefiles"
 mingw32-make
 cp ../libs/libusb-1.0.dll .
 .\molink.exe
 ```
 
-### 技术要点
+---
 
-- **校验和**: `sum(data_bytes)` 简单字节求和，不是 CRC32
-- **A_CNXN**: header(24B, LE) + data(banner, 不含 NUL), 各一次独立 bulk write
-- **版本**: 0x01000001 (A_VERSION_SKIP_CHECKSUM — 但设备仍校验 checksum)
-- **RSA 密钥**: 2048-bit, 从 `%USERPROFILE%\.android\adbkey` (PKCS#8 PEM) 导入
-- **签名**: NCryptSignHash + BCRYPT_PAD_PKCS1 + SHA1
-- **公钥格式**: `user\0` + 4 bytes LE exponent + 256 bytes LE modulus (共 272 bytes)
-- **密钥导入路径**: CNG blob 失败 → loadPkcs8() PKCS#8 DER 解析 → NCryptImportKey
-- **编译**: MinGW64 GCC 12.1.0, 链接 libusb-1.0.dll.a, ws2_32, bcrypt, ncrypt, crypt32
+## 正式开发建议
+
+- **线程模型**：当前 select+50ms poll 单线程，正式版建议 USB I/O 加锁 + 独立转发线程
+- **多通道**：当前仅 `local_id=1`，正式版需通道 ID 分配管理
+- **重连**：USB 断开后自动重发现+重握手
+- **多设备**：按序列号匹配设备
+- **密钥持久化**：首次授权后保存 `.pub`，后续免弹窗
+- **错误处理**：返回错误码+重试逻辑，替代当前 printf+exit

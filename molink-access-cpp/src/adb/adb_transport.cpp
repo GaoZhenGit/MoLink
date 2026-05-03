@@ -152,8 +152,8 @@ uint32_t AdbTransport::openChannel(const std::string& destination, uint32_t loca
     }
 
     printf("ADB: Channel %u opened to %s, remote_id=%u\n",
-           local_id, destination.c_str(), msg.arg1);
-    return msg.arg1;
+           local_id, destination.c_str(), msg.arg0);
+    return msg.arg0;
 }
 
 bool AdbTransport::handshake(AdbRsa& rsa, const std::string& banner) {
@@ -218,6 +218,38 @@ bool AdbTransport::handshake(AdbRsa& rsa, const std::string& banner) {
 
     printf("FAIL: Handshake loop exhausted\n");
     return false;
+}
+
+bool AdbTransport::writeChannel(uint32_t local_id, uint32_t remote_id,
+                                const void* data, uint32_t len) {
+    return send(A_WRTE, local_id, remote_id, data, len);
+}
+
+bool AdbTransport::readChannel(uint32_t local_id, uint32_t remote_id,
+                               std::vector<uint8_t>& data, uint32_t timeout_ms) {
+    while (true) {
+        AdbMessage msg;
+        if (!recv(msg, data, timeout_ms)) return false;
+
+        if (msg.command == A_CLSE) {
+            printf("ADB: Channel %u/%u closed by remote\n", local_id, remote_id);
+            data.clear();
+            return false;
+        }
+        if (msg.command == A_OKAY) {
+            // 对方确认收到我们的数据，跳过继续等数据帧
+            continue;
+        }
+        if (msg.command != A_WRTE) {
+            printf("ADB: Unexpected cmd 0x%08X on channel %u/%u\n",
+                   msg.command, local_id, remote_id);
+            return false;
+        }
+        // 确认收到设备发来的数据，回 A_OKAY
+        send(A_OKAY, local_id, remote_id, nullptr, 0);
+        printf("ADB: Channel %u/%u read %u bytes\n", local_id, remote_id, (uint32_t)data.size());
+        return true;
+    }
 }
 
 void AdbTransport::closeChannel(uint32_t local_id, uint32_t remote_id) {
