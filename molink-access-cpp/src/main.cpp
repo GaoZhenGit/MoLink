@@ -9,6 +9,9 @@
 #include "adb/adb_client.h"
 #include "forward/forwarder.h"
 #include "cli/named_pipe.h"
+#include "transfer/file_push.h"
+#include "transfer/file_pull.h"
+#include "transfer/file_list.h"
 
 // ---- 全局（Ctrl+C 用） ----
 static Forwarder* g_forwarder = nullptr;
@@ -282,6 +285,30 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
                      forwarder.getConnectionCount());
             return buf;
         }
+        // File transfer commands
+        if (cmd.rfind("push ", 0) == 0) {
+            std::string args = cmd.substr(5);
+            size_t space = args.find(' ');
+            if (space == std::string::npos) return "fail: Usage: push <local> <remote>";
+            std::string local = args.substr(0, space);
+            std::string remote = args.substr(space + 1);
+            return pushFile(client, local, remote);
+        }
+        if (cmd.rfind("pull ", 0) == 0) {
+            std::string args = cmd.substr(5);
+            size_t space = args.find(' ');
+            if (space == std::string::npos) return "fail: Usage: pull <remote> <local>";
+            std::string remote = args.substr(0, space);
+            std::string local = args.substr(space + 1);
+            return pullFile(client, remote, local);
+        }
+        if (cmd.rfind("ls", 0) == 0) {
+            std::string path;
+            if (cmd.size() > 2) {
+                path = cmd.substr(3);
+            }
+            return listFiles(client, path);
+        }
         return "unknown";
     });
 
@@ -502,6 +529,9 @@ static void printUsage() {
            "  molink stop                   Stop running daemon\n"
            "  molink devices                List ADB devices\n"
            "  molink status                 Show daemon status\n"
+           "  molink push     <local> <remote>  Upload file to device\n"
+           "  molink pull     <remote> <local>  Download file from device\n"
+           "  molink ls       [remote_path]     List device directory\n"
            "  molink --help                 Show this help\n\n"
            "Options:\n"
            "  --port, -p <port>             Local TCP port (default: 1080)\n"
@@ -528,6 +558,49 @@ int main(int argc, char* argv[]) {
     if (strcmp(argv[1], "devices") == 0) return cmdDevices();
     if (strcmp(argv[1], "status") == 0)  return cmdStatus();
     if (strcmp(argv[1], "stop") == 0)    return cmdStop();
+
+    // push/pull/ls CLI dispatch
+    if (strcmp(argv[1], "push") == 0) {
+        if (argc < 4) {
+            printf("Usage: molink push <local_file> <remote_path>\n");
+            return 1;
+        }
+        std::string cmd = std::string("push ") + argv[2] + " " + argv[3];
+        auto resp = sendPipeCmd(cmd);
+        if (resp.empty()) {
+            printf("Daemon is not running. Use 'molink start' first.\n");
+            return 1;
+        }
+        printf("%s\n", resp.c_str());
+        return (resp == "ok") ? 0 : 1;
+    }
+
+    if (strcmp(argv[1], "pull") == 0) {
+        if (argc < 4) {
+            printf("Usage: molink pull <remote_path> <local_file>\n");
+            return 1;
+        }
+        std::string cmd = std::string("pull ") + argv[2] + " " + argv[3];
+        auto resp = sendPipeCmd(cmd);
+        if (resp.empty()) {
+            printf("Daemon is not running. Use 'molink start' first.\n");
+            return 1;
+        }
+        printf("%s\n", resp.c_str());
+        return (resp == "ok") ? 0 : 1;
+    }
+
+    if (strcmp(argv[1], "ls") == 0) {
+        std::string path = (argc >= 3) ? argv[2] : "/sdcard/";
+        std::string cmd = "ls " + path;
+        auto resp = sendPipeCmd(cmd);
+        if (resp.empty()) {
+            printf("Daemon is not running. Use 'molink start' first.\n");
+            return 1;
+        }
+        printf("%s", resp.c_str());
+        return 0;
+    }
 
     // 解析 options
     uint16_t localPort = 1080;

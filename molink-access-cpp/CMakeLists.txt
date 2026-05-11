@@ -18,8 +18,13 @@ add_executable(molink
     src/adb/adb_rsa.cpp
     src/adb/adb_reader.cpp
     src/adb/adb_client.cpp
+    src/adb/adb_sync.cpp
+    src/adb/adb_shell.cpp
     src/cli/named_pipe.cpp
     src/forward/forwarder.cpp
+    src/transfer/file_push.cpp
+    src/transfer/file_pull.cpp
+    src/transfer/file_list.cpp
 )
 
 target_link_libraries(molink libusb-1.0.a ws2_32 bcrypt crypt32 winusb setupapi ole32)
