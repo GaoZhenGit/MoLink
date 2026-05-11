@@ -10,6 +10,13 @@
 #include <memory>
 #include <mutex>
 #include <cstdint>
+#include <windows.h>
+
+enum class DaemonState {
+    CONNECTED,
+    DISCONNECTED,
+    STOPPING
+};
 
 class AdbClient {
 public:
@@ -45,6 +52,11 @@ public:
     // 状态查询
     int getActiveChannelCount() const;
 
+    // 热插拔
+    void setDisconnectEvent(HANDLE h) { m_hDisconnectEvent = h; }
+    DaemonState getState() const { return m_state; }
+    void setState(DaemonState s) { m_state = s; }
+
 private:
     std::vector<UsbDevice> m_devices;
     UsbDevice* m_selectedDev = nullptr;
@@ -58,6 +70,8 @@ private:
     bool m_connected = false;
     uint32_t m_nextLocalId = 1;
     std::mutex m_writeMutex;
+    HANDLE m_hDisconnectEvent = nullptr;
+    DaemonState m_state = DaemonState::CONNECTED;
 
     bool loadOrGenerateKey();
 };

@@ -17,7 +17,10 @@ public:
 
     bool start();
     void stop();
+    void pause();
+    void resume();
     bool isRunning() const { return m_running; }
+    bool isPaused() const { return m_paused; }
     uint16_t getLocalPort() const { return m_localPort; }
     int getConnectionCount() const;
 
@@ -37,6 +40,7 @@ private:
 
     // 并发控制
     static constexpr int kMaxConnections = 16;
+    std::atomic<bool> m_paused{false};
     int m_activeCount = 0;
     std::mutex m_slotMutex;
 };

@@ -1,6 +1,7 @@
 #include "adb_reader.h"
 #include "adb_transport.h"
 #include <cstdio>
+#include <chrono>
 
 AdbReader::AdbReader() {}
 AdbReader::~AdbReader() { stop(); }
@@ -27,7 +28,19 @@ void AdbReader::readLoop() {
     while (m_running) {
         AdbMessage msg;
         std::vector<uint8_t> data;
-        if (!m_transport->recv(msg, data, 100)) continue;
+        if (!m_transport->recv(msg, data, 100)) {
+            // Only trigger disconnect on fatal USB errors (NO_DEVICE, IO),
+            // not on normal timeouts (which happen during idle).
+            if (m_transport->hadFatalError() && m_onDisconnect) {
+                m_onDisconnect();
+                // Wait until stop() is called (transition to DISCONNECTED)
+                while (m_running) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                break;
+            }
+            continue;
+        }
 
         uint32_t localId = msg.arg1;
 

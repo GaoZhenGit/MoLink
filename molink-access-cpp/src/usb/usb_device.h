@@ -25,6 +25,7 @@ public:
     uint8_t getWriteEndpoint() const { return m_write_ep; }
     bool bulkRead(void* buf, int len, int* transferred, int timeout_ms);
     bool bulkWrite(const void* buf, int len, int* transferred, int timeout_ms);
+    bool isLastErrorFatal() const { return m_lastErrorFatal; }
     void close();
     bool isOpen() const { return m_open; }
 
@@ -36,6 +37,7 @@ private:
     uint8_t              m_write_ep;
     int                  m_interface_number;
     bool                 m_open;
+    mutable bool         m_lastErrorFatal = false;
 };
 
 #endif

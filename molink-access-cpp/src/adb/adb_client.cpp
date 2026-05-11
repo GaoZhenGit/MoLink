@@ -100,8 +100,17 @@ bool AdbClient::connect(const std::string& serial) {
         if (m_transport->handshake(*m_rsa, banner)) {
             m_selectedDev = selected;
             m_connected = true;
+            m_state = DaemonState::CONNECTED;
             m_reader.start(m_transport.get(), &m_channels, &m_pending,
                           &m_channelMutex, &m_writeMutex);
+
+            // Wire disconnect notification
+            if (m_hDisconnectEvent) {
+                m_reader.setDisconnectCallback([this]() {
+                    SetEvent(m_hDisconnectEvent);
+                });
+            }
+
             printf("ADB: Connected\n");
             return true;
         }
@@ -159,6 +168,7 @@ void AdbClient::disconnect() {
     m_devices.clear();
     m_serial.clear();
     m_nextLocalId = 1;
+    m_state = DaemonState::DISCONNECTED;
 }
 
 int AdbClient::getActiveChannelCount() const {

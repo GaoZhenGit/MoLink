@@ -244,8 +244,12 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
     printf("MoLink daemon starting (pid=%lu)...\n", GetCurrentProcessId());
 
     AdbClient client;
+    HANDLE hDisconnectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    client.setDisconnectEvent(hDisconnectEvent);
+
     if (!client.connect(serial)) {
         printf("FAIL: Cannot connect to device\n");
+        CloseHandle(hDisconnectEvent);
         releaseDaemonLock();
         return 1;
     }
@@ -254,6 +258,7 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
     Forwarder forwarder(client, localPort, remotePort);
     if (!forwarder.start()) {
         printf("FAIL: Cannot start forwarder\n");
+        CloseHandle(hDisconnectEvent);
         releaseDaemonLock();
         return 1;
     }
@@ -268,8 +273,11 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
         }
         if (cmd == "status") {
             char buf[256];
+            const char* stateStr = (client.getState() == DaemonState::CONNECTED)
+                ? "connected" : "disconnected";
             snprintf(buf, sizeof(buf),
-                     "connected  serial=%s  port=%u  connections=%d",
+                     "%s  serial=%s  port=%u  connections=%d",
+                     stateStr,
                      client.getSerial().c_str(), localPort,
                      forwarder.getConnectionCount());
             return buf;
@@ -282,6 +290,7 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
         printf("FAIL: Cannot create named pipe\n");
         forwarder.stop();
         CloseHandle(hStopEvent);
+        CloseHandle(hDisconnectEvent);
         releaseDaemonLock();
         return 1;
     }
@@ -289,18 +298,73 @@ static int daemonMain(uint16_t localPort, uint16_t remotePort,
     writePidFile();
     printf("Daemon ready. Use 'molink stop' to stop.\n");
 
+    // 保存串号用于重连（disconnect 会清空 m_serial）
+    std::string lastSerial = serial;
+
+    auto transitionToDisconnected = [&]() {
+        ResetEvent(hDisconnectEvent);
+        client.setState(DaemonState::DISCONNECTED);
+        forwarder.pause();
+        lastSerial = client.getSerial(); // 在 disconnect 前保存
+        client.disconnect();
+        printf("Daemon: Device disconnected (serial=%s), waiting for reconnect...\n",
+               lastSerial.c_str());
+    };
+
+    auto tryReconnect = [&]() -> bool {
+        printf("Daemon: Attempting reconnect with serial=%s...\n",
+               lastSerial.empty() ? "(auto)" : lastSerial.c_str());
+        if (client.connect(lastSerial)) {
+            forwarder.resume();
+            client.setState(DaemonState::CONNECTED);
+            printf("Daemon: Reconnected\n");
+            return true;
+        }
+        return false;
+    };
+
     bool running = true;
+    DWORD lastReconnectAttempt = 0; // tick count of last attempt
+
     while (running) {
-        HANDLE handles[2] = { hStopEvent, hPipeEvent };
-        DWORD ret = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
-        if (ret == WAIT_OBJECT_0) running = false;
-        else if (ret == WAIT_OBJECT_0 + 1) pipe.processConnection();
+        DaemonState state = client.getState();
+        // Use short timeout so pipe events don't starve reconnect checks
+        DWORD timeout = 500; // check every 500ms
+
+        HANDLE handles[3] = { hStopEvent, hPipeEvent, hDisconnectEvent };
+        DWORD ret = WaitForMultipleObjects(3, handles, FALSE, timeout);
+
+        if (ret == WAIT_OBJECT_0) {
+            // hStopEvent
+            client.setState(DaemonState::STOPPING);
+            running = false;
+        }
+        else if (ret == WAIT_OBJECT_0 + 1) {
+            // hPipeEvent
+            pipe.processConnection();
+        }
+        else if (ret == WAIT_OBJECT_0 + 2) {
+            // hDisconnectEvent — device removed
+            transitionToDisconnected();
+            lastReconnectAttempt = GetTickCount(); // reset timer on fresh disconnect
+        }
+
+        // Try reconnect if disconnected and enough time passed
+        if (state == DaemonState::DISCONNECTED) {
+            DWORD now = GetTickCount();
+            if (now - lastReconnectAttempt >= 1000) {
+                lastReconnectAttempt = now;
+                tryReconnect();
+            }
+        }
     }
 
     printf("Daemon stopping...\n");
     pipe.stop();
     forwarder.stop();
+    client.disconnect();
     CloseHandle(hStopEvent);
+    CloseHandle(hDisconnectEvent);
     removePidFile();
     releaseDaemonLock();
     return 0;
@@ -380,8 +444,12 @@ static int foregroundMode(uint16_t localPort, uint16_t remotePort,
     printf("Local: 127.0.0.1:%u -> Device tcp:%u\n", localPort, remotePort);
 
     AdbClient client;
+    HANDLE hDisconnectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    client.setDisconnectEvent(hDisconnectEvent);
+
     if (!client.connect(serial)) {
         printf("FAIL: Cannot connect to device\n");
+        CloseHandle(hDisconnectEvent);
         return 1;
     }
     printf("Device: %s\n", client.getSerial().c_str());
@@ -389,6 +457,7 @@ static int foregroundMode(uint16_t localPort, uint16_t remotePort,
     Forwarder forwarder(client, localPort, remotePort);
     if (!forwarder.start()) {
         printf("FAIL: Cannot start forwarder\n");
+        CloseHandle(hDisconnectEvent);
         return 1;
     }
 
@@ -397,8 +466,28 @@ static int foregroundMode(uint16_t localPort, uint16_t remotePort,
     printf("Forwarding active. Press Ctrl+C to stop.\n");
 
     while (forwarder.isRunning()) {
-        Sleep(500);
+        DWORD ret = WaitForSingleObject(hDisconnectEvent, 500);
+        if (ret == WAIT_OBJECT_0) {
+            // Device disconnected
+            ResetEvent(hDisconnectEvent);
+            printf("\n[Device disconnected, reconnecting...]\n");
+            forwarder.pause();
+            client.disconnect();
+
+            bool reconnected = false;
+            while (!reconnected && forwarder.isRunning()) {
+                Sleep(1000);
+                printf("[Reconnect attempt...]\n");
+                if (client.connect(serial)) {
+                    forwarder.resume();
+                    reconnected = true;
+                    printf("[Reconnected]\n");
+                }
+            }
+            if (!reconnected) break; // Ctrl+C during reconnect
+        }
     }
+    CloseHandle(hDisconnectEvent);
 
     printf("MoLink stopped.\n");
     return 0;

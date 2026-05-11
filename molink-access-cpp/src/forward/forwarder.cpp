@@ -79,8 +79,28 @@ void Forwarder::releaseSlot() {
     m_activeCount--;
 }
 
+void Forwarder::pause() {
+    m_paused = true;
+    printf("FWD: Paused (device disconnected), waiting for %d active relays...\n", m_activeCount);
+    for (int i = 0; i < 15 && m_activeCount > 0; i++) {
+        Sleep(100);
+    }
+    if (m_activeCount > 0) {
+        printf("FWD: Warning — %d relays still active after 1.5s\n", m_activeCount);
+    }
+}
+
+void Forwarder::resume() {
+    m_paused = false;
+    printf("FWD: Resumed\n");
+}
+
 void Forwarder::acceptLoop() {
     while (m_running) {
+        if (m_paused) {
+            Sleep(200);
+            continue;
+        }
         SOCKET clientSock = accept(m_listenSock, nullptr, nullptr);
         if (clientSock == INVALID_SOCKET) {
             if (m_running) printf("FWD: accept() failed: %d\n", WSAGetLastError());

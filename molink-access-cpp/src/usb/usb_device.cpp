@@ -160,11 +160,13 @@ bool UsbDevice::bulkRead(void* buf, int len, int* transferred, int timeout_ms) {
                                    (unsigned char*)buf, len,
                                    transferred, timeout_ms);
     if (ret < 0) {
-        if (ret != LIBUSB_ERROR_TIMEOUT) {
+        m_lastErrorFatal = (ret != LIBUSB_ERROR_TIMEOUT);
+        if (m_lastErrorFatal) {
             printf("USB: bulkRead error: %s\n", libusb_error_name(ret));
         }
         return false;
     }
+    m_lastErrorFatal = false;
     return true;
 }
 

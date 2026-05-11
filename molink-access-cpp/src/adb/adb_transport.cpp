@@ -7,6 +7,10 @@
 AdbTransport::AdbTransport(UsbDevice& device)
     : m_device(device) {}
 
+bool AdbTransport::hadFatalError() const {
+    return m_device.isLastErrorFatal();
+}
+
 bool AdbTransport::readExact(void* buf, uint32_t len, uint32_t timeout_ms) {
     uint8_t* p = (uint8_t*)buf;
     int remain = (int)len;

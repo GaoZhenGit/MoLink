@@ -10,6 +10,7 @@
 #include <atomic>
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 class AdbTransport;
 
@@ -36,6 +37,8 @@ struct PendingOpen {
 using PendingOpenPtr = std::shared_ptr<PendingOpen>;
 using PendingMap = std::unordered_map<uint32_t, PendingOpenPtr>;
 
+using DisconnectCallback = std::function<void()>;
+
 class AdbReader {
 public:
     AdbReader();
@@ -45,8 +48,12 @@ public:
                PendingMap* pending, std::mutex* mapMutex, std::mutex* writeMutex);
     void stop();
 
+    void setDisconnectCallback(DisconnectCallback cb) { m_onDisconnect = cb; }
+
 private:
     void readLoop();
+
+    DisconnectCallback m_onDisconnect;
 
     AdbTransport* m_transport = nullptr;
     ChannelMap* m_channels = nullptr;

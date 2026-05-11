@@ -57,6 +57,7 @@ public:
                      std::vector<uint8_t>& data, uint32_t timeout_ms = 5000);
     void closeChannel(uint32_t local_id, uint32_t remote_id);
 
+    bool hadFatalError() const;
     const std::vector<uint8_t>& getAuthToken() const { return m_auth_token; }
     static uint32_t checksum(const uint8_t* data, uint32_t len) {
         uint32_t sum = 0;
