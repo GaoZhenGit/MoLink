@@ -18,6 +18,7 @@ struct Channel {
     uint32_t localId;
     uint32_t remoteId;
     std::queue<std::vector<uint8_t>> dataQueue;
+    std::vector<uint8_t> syncBuf;  // partial sync message accumulator
     std::mutex mtx;
     std::condition_variable cv;
     bool closed = false;

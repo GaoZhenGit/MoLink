@@ -22,6 +22,7 @@ public:
     bool isRunning() const { return m_running; }
     bool isPaused() const { return m_paused; }
     uint16_t getLocalPort() const { return m_localPort; }
+    uint16_t getRemotePort() const { return m_remotePort; }
     int getConnectionCount() const;
 
 private:

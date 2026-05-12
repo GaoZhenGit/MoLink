@@ -3,6 +3,7 @@
 #include "adb_client.h"
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <chrono>
 
 static bool sendSyncMsg(AdbClient& client, ChannelPtr ch,
@@ -26,44 +27,71 @@ bool syncReadResponse(ChannelPtr ch, SyncMsg& msg,
 
     while (std::chrono::steady_clock::now() < deadline) {
         std::unique_lock<std::mutex> lock(ch->mtx);
-        if (!ch->dataQueue.empty()) {
-            auto raw = std::move(ch->dataQueue.front());
-            ch->dataQueue.pop();
 
-            if (raw.size() < sizeof(SyncMsg)) {
-                lock.unlock();
-                printf("SYNC: Short message (%zu bytes)\n", raw.size());
-                return false;
+        // Try to assemble a complete message from syncBuf + queue
+        std::vector<uint8_t> raw;
+        if (!ch->syncBuf.empty()) {
+            raw = std::move(ch->syncBuf);
+            ch->syncBuf.clear();
+        }
+
+        while (!ch->dataQueue.empty() && raw.size() < sizeof(SyncMsg)) {
+            auto& front = ch->dataQueue.front();
+            size_t need = sizeof(SyncMsg) - raw.size();
+            size_t take = std::min(need, front.size());
+            raw.insert(raw.end(), front.begin(), front.begin() + take);
+            if (take < front.size()) {
+                // Front still has data, shift it
+                front.erase(front.begin(), front.begin() + take);
+            } else {
+                ch->dataQueue.pop();
             }
+        }
+
+        // Now check if we have at least a header
+        if (raw.size() >= sizeof(SyncMsg)) {
             memcpy(&msg, raw.data(), sizeof(SyncMsg));
-
             uint32_t msgLen = sizeof(SyncMsg) + msg.data_length;
-            if (raw.size() < msgLen) {
-                lock.unlock();
-                printf("SYNC: Incomplete message (%zu < %u)\n", raw.size(), msgLen);
-                return false;
-            }
 
-            payload.assign(raw.begin() + sizeof(SyncMsg),
-                          raw.begin() + msgLen);
-
-            // Push leftover data back (device may batch multiple sync msgs)
-            if (raw.size() > msgLen) {
-                std::vector<uint8_t> leftover(raw.begin() + msgLen, raw.end());
-                // Push to front by swapping with a temporary queue
-                std::queue<std::vector<uint8_t>> temp;
-                temp.push(std::move(leftover));
-                while (!ch->dataQueue.empty()) {
-                    temp.push(std::move(ch->dataQueue.front()));
+            // Try to get remaining bytes for payload
+            while (!ch->dataQueue.empty() && raw.size() < msgLen) {
+                auto& front = ch->dataQueue.front();
+                size_t need = msgLen - raw.size();
+                size_t take = std::min(need, front.size());
+                raw.insert(raw.end(), front.begin(), front.begin() + take);
+                if (take < front.size()) {
+                    front.erase(front.begin(), front.begin() + take);
+                } else {
                     ch->dataQueue.pop();
                 }
-                ch->dataQueue = std::move(temp);
             }
 
-            lock.unlock();
-            return true;
+            if (raw.size() >= msgLen) {
+                payload.assign(raw.begin() + sizeof(SyncMsg),
+                              raw.begin() + msgLen);
+
+                // Push leftover data back
+                if (raw.size() > msgLen) {
+                    std::vector<uint8_t> leftover(raw.begin() + msgLen, raw.end());
+                    std::queue<std::vector<uint8_t>> temp;
+                    temp.push(std::move(leftover));
+                    while (!ch->dataQueue.empty()) {
+                        temp.push(std::move(ch->dataQueue.front()));
+                        ch->dataQueue.pop();
+                    }
+                    ch->dataQueue = std::move(temp);
+                }
+                return true;
+            }
+
+            // Not enough data yet — save to syncBuf and wait for more
+            ch->syncBuf = std::move(raw);
+        } else if (!raw.empty()) {
+            // Have some data but not even a header yet — save and wait
+            ch->syncBuf = std::move(raw);
         }
-        if (ch->closed) {
+
+        if (ch->closed && ch->dataQueue.empty()) {
             printf("SYNC: Channel closed by device\n");
             return false;
         }

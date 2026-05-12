@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
 
 include_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/include)
+include_directories(${CMAKE_SOURCE_DIR}/src/utils)
 link_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/lib)
 
 add_executable(molink
