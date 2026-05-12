@@ -22,6 +22,14 @@ add_executable(molink
     src/adb/adb_sync.cpp
     src/adb/adb_shell.cpp
     src/cli/named_pipe.cpp
+    src/cli/cli_utils.cpp
+    src/cli/cli_apush.cpp
+    src/cli/cli_apull.cpp
+    src/cli/cli_adel.cpp
+    src/cli/cli_del.cpp
+    src/cli/cli_devices.cpp
+    src/cli/cli_forward.cpp
+    src/daemon/daemon_app.cpp
     src/forward/forwarder.cpp
     src/transfer/file_push.cpp
     src/transfer/file_pull.cpp
