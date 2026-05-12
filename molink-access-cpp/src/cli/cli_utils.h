@@ -29,5 +29,6 @@ int cmdAdel(int argc, char* argv[]);
 int cmdDevices();
 int cmdDel(int argc, char* argv[]);
 int cmdForward(int argc, char* argv[]);
+int cmdAuth(int argc, char* argv[]);
 
 #endif

@@ -141,17 +141,29 @@ bool UsbDevice::clearHalt(uint8_t ep) {
 }
 
 std::string UsbDevice::getSerial() const {
-    if (!m_handle) return "";
+    libusb_device_handle* handle = m_handle;
+    bool tempOpen = false;
+
+    if (!handle) {
+        // 临时打开读序列号（不需要 claim interface）
+        if (libusb_open(m_device, &handle) != 0) return "";
+        tempOpen = true;
+    }
 
     libusb_device_descriptor desc;
-    if (libusb_get_device_descriptor(m_device, &desc) != 0) return "";
-    if (desc.iSerialNumber == 0) return "";
+    int ret = libusb_get_device_descriptor(m_device, &desc);
+    if (ret != 0 || desc.iSerialNumber == 0) {
+        if (tempOpen) libusb_close(handle);
+        return "";
+    }
 
     unsigned char buf[256] = {0};
     int len = libusb_get_string_descriptor_ascii(
-        m_handle, desc.iSerialNumber, buf, sizeof(buf));
-    if (len < 0) return "";
+        handle, desc.iSerialNumber, buf, sizeof(buf));
 
+    if (tempOpen) libusb_close(handle);
+
+    if (len < 0) return "";
     return std::string((char*)buf, len);
 }
 

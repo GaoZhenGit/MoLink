@@ -7,6 +7,9 @@
 #include <windows.h>
 #include <bcrypt.h>
 
+// 返回 exe 同级目录下的 molink_key.bin 路径
+std::string getDefaultKeyPath();
+
 class AdbRsa {
 public:
     AdbRsa();
@@ -35,7 +38,6 @@ private:
     std::vector<uint8_t> exportKeyBlob();
     bool importKeyBlob(const uint8_t* blob, size_t len);
     std::vector<uint8_t> buildRsaPublicKey();
-    bool readAdbPubKey(std::string& out);
 };
 
 #endif

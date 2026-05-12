@@ -1,6 +1,5 @@
 #include "adb_client.h"
 #include <cstdio>
-#include <shlobj.h>
 
 // ---- Device Discovery ----
 
@@ -30,17 +29,8 @@ AdbClient::~AdbClient() {
 bool AdbClient::loadOrGenerateKey() {
     m_rsa.reset(new AdbRsa());
 
-    char appdata[MAX_PATH] = {};
-    if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata) == S_OK) {
-        std::string keyPath = std::string(appdata) + "\\.android\\molink_key.bin";
-        if (m_rsa->loadKey(keyPath)) return true;
-
-        std::string adbKeyPath = std::string(appdata) + "\\.android\\adbkey";
-        if (m_rsa->loadPkcs8(adbKeyPath)) {
-            printf("ADB: Key imported from adbkey\n");
-            return true;
-        }
-    }
+    std::string keyPath = getDefaultKeyPath();
+    if (m_rsa->loadKey(keyPath)) return true;
 
     printf("ADB: Generating new RSA key...\n");
     if (!m_rsa->generateKey()) {
@@ -48,10 +38,7 @@ bool AdbClient::loadOrGenerateKey() {
         return false;
     }
 
-    if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata) == S_OK) {
-        std::string keyPath = std::string(appdata) + "\\.android\\molink_key.bin";
-        m_rsa->saveKey(keyPath);
-    }
+    m_rsa->saveKey(keyPath);
     return true;
 }
 

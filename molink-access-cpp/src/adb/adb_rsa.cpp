@@ -2,10 +2,18 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
-#include <shlobj.h>
 
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "crypt32.lib")
+
+std::string getDefaultKeyPath() {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(nullptr, exePath, sizeof(exePath));
+    std::string dir(exePath);
+    size_t pos = dir.find_last_of("\\/");
+    if (pos != std::string::npos) dir.resize(pos + 1);
+    return dir + "molink_key.bin";
+}
 
 AdbRsa::AdbRsa() : m_key(nullptr), m_alg(nullptr) {}
 
@@ -118,6 +126,8 @@ bool AdbRsa::importKeyBlob(const uint8_t* blob, size_t len) {
         BCryptDestroyKey(m_key);
         m_key = nullptr;
     }
+    m_cachedModulus.clear();
+    m_cachedExp.clear();
 
     NTSTATUS status = BCryptImportKeyPair(m_alg, nullptr, BCRYPT_RSAFULLPRIVATE_BLOB,
                                            &m_key, (PUCHAR)blob, (ULONG)len, 0);
@@ -125,6 +135,29 @@ bool AdbRsa::importKeyBlob(const uint8_t* blob, size_t len) {
         printf("RSA: ImportKeyPair failed: 0x%08X\n", (unsigned)status);
         return false;
     }
+
+    // 导出公钥参数到缓存，供 buildRsaPublicKey() 使用
+    ULONG pubBlobSize = 0;
+    status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                              nullptr, 0, &pubBlobSize, 0);
+    if (status == 0 && pubBlobSize > 0) {
+        std::vector<uint8_t> pubBlob(pubBlobSize);
+        status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                                  pubBlob.data(), pubBlobSize, &pubBlobSize, 0);
+        if (status == 0) {
+            BCRYPT_RSAKEY_BLOB* header = (BCRYPT_RSAKEY_BLOB*)pubBlob.data();
+            uint8_t* keyData = pubBlob.data() + sizeof(BCRYPT_RSAKEY_BLOB);
+            m_cachedExp.assign(keyData, keyData + header->cbPublicExp);
+            m_cachedModulus.assign(keyData + header->cbPublicExp,
+                                    keyData + header->cbPublicExp + header->cbModulus);
+            while (m_cachedExp.size() < 4) m_cachedExp.insert(m_cachedExp.begin(), 0);
+            while (!m_cachedModulus.empty() && m_cachedModulus[0] == 0)
+                m_cachedModulus.erase(m_cachedModulus.begin());
+            printf("RSA: Cached n=%zu bytes, e=%zu bytes from imported key\n",
+                   m_cachedModulus.size(), m_cachedExp.size());
+        }
+    }
+
     printf("RSA: Key pair imported (%zu bytes)\n", len);
     return true;
 }
@@ -728,54 +761,13 @@ std::string AdbRsa::base64Encode(const uint8_t* data, size_t len) {
     return result;
 }
 
-bool AdbRsa::readAdbPubKey(std::string& out) {
-    char appdata[MAX_PATH] = {};
-    if (SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr, 0, appdata) != S_OK)
-        return false;
-
-    std::string path = std::string(appdata) + "\\.android\\adbkey.pub";
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) return false;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (size <= 0 || size > 2048) {
-        fclose(f);
-        return false;
-    }
-
-    out.resize(size);
-    size_t read = fread(&out[0], 1, size, f);
-    fclose(f);
-
-    if (read != (size_t)size) return false;
-
-    // 去除末尾的换行符
-    while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
-        out.pop_back();
-
-    printf("RSA: Read adbkey.pub (%zu chars)\n", out.size());
-    return true;
-}
-
 std::string AdbRsa::getPubKeyPayload() {
-    // 优先复用 adb 的 .pub 文件
-    std::string pubKeyStr;
-    if (readAdbPubKey(pubKeyStr)) {
-        pubKeyStr += '\0';
-        printf("RSA: Using adbkey.pub for AUTH_RSAPUBLICKEY (%zu bytes)\n", pubKeyStr.size());
-        return pubKeyStr;
-    }
-
-    // 没有 .pub 文件，自己构建 RSAPublicKey
     if (!isReady()) {
         printf("RSA: Key not ready, cannot build RSAPublicKey\n");
         return {};
     }
 
-    // 如果缓存为空（从旧文件加载的 BCrypt key），尝试导出公钥参数
+    // 如果缓存为空，从已加载的 key 导出公钥参数
     if (m_cachedModulus.empty()) {
         ULONG blobSize = 0;
         NTSTATUS status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
@@ -797,6 +789,10 @@ std::string AdbRsa::getPubKeyPayload() {
                        m_cachedModulus.size(), m_cachedExp.size());
             }
         }
+        if (m_cachedModulus.empty()) {
+            printf("RSA: Cannot export public key parameters\n");
+            return {};
+        }
     }
 
     auto rsapk = buildRsaPublicKey();
@@ -805,7 +801,6 @@ std::string AdbRsa::getPubKeyPayload() {
     std::string b64 = base64Encode(rsapk.data(), rsapk.size());
     if (b64.empty()) return {};
 
-    // 用户名
     char user[256] = {};
     DWORD userLen = sizeof(user);
     GetUserNameA(user, &userLen);

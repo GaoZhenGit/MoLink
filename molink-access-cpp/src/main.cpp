@@ -221,6 +221,7 @@ static void printUsage() {
            "  molink del      <remote_path>     Delete file on device\n"
            "  molink adel     [--rdir R]        Interactive delete (b64_ files)\n"
            "  molink shell    <command>         Execute shell command on device\n"
+           "  molink auth     [--serial,-s SN]  Trigger device authorization dialog\n"
            "\n"
            "Options (run/start/forward):\n"
            "  --port, -p <port>                Local TCP port (default: 1080)\n"
@@ -249,6 +250,7 @@ int main(int argc, char* argv[]) {
 
     // ---- 无连接命令 ----
     if (strcmp(argv[1], "devices") == 0) return cmdDevices();
+    if (strcmp(argv[1], "auth") == 0)    return cmdAuth(argc, argv);
     if (strcmp(argv[1], "status") == 0)  return cmdStatus();
     if (strcmp(argv[1], "stop") == 0)    return cmdStop();
     if (strcmp(argv[1], "forward") == 0) return cmdForward(argc, argv);

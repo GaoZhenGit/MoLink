@@ -3,6 +3,7 @@
 #include "../transfer/file_pull.h"
 #include "../transfer/file_list.h"
 #include "../adb/adb_shell.h"
+#include "../usb/usb_device.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -111,6 +112,33 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
                      m_client.getSerial().c_str());
         }
         return buf;
+    }
+    if (cmd == "devices") {
+        // 枚举所有 ADB 设备，返回序列号及授权状态
+        std::string result;
+        auto devices = UsbDevice::discover();
+        std::string connectedSerial = m_client.getSerial();
+
+        std::vector<std::string> foundSerials;
+        for (auto& dev : devices) {
+            std::string serial = dev.getSerial();
+            if (!serial.empty()) foundSerials.push_back(serial);
+        }
+
+        // 确保 daemon 已连接的设备在列表中（其 USB 可能被占用导致 getSerial 失败）
+        if (!connectedSerial.empty()) {
+            bool inList = false;
+            for (auto& s : foundSerials) {
+                if (s == connectedSerial) { inList = true; break; }
+            }
+            if (!inList) foundSerials.push_back(connectedSerial);
+        }
+
+        for (auto& s : foundSerials) {
+            result += s + (s == connectedSerial ? " yes\n" : " ?\n");
+        }
+        if (result.empty()) result = "(none)\n";
+        return result;
     }
     if (cmd.rfind("push ", 0) == 0) {
         std::string args = cmd.substr(5);
