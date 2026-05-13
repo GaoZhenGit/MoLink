@@ -25,7 +25,8 @@ public class ConnectionRecord {
     public final String protocol;
     public final AtomicLong bytesDown = new AtomicLong(0);
     public final AtomicLong bytesUp = new AtomicLong(0);
-    public volatile ConnectionState state = ConnectionState.ACTIVE;  // 原 active + failed
+    public volatile ConnectionState state = ConnectionState.ACTIVE;
+    private volatile long endTime = 0;
 
     public ConnectionRecord(String clientIp, String targetHost, int targetPort,
                             long startTime, String protocol) {
@@ -42,10 +43,11 @@ public class ConnectionRecord {
     public void addBytesDown(long n) { bytesDown.addAndGet(n); }
     public void addBytesUp(long n) { bytesUp.addAndGet(n); }
 
-    /** 标记连接已结束（由 forward() 在任一方向结束时调用） */
+    /** 标记连接已结束，冻结结束时间 */
     public synchronized void setEnded() {
         if (this.state == ConnectionState.ACTIVE) {
             this.state = ConnectionState.ENDED;
+            this.endTime = System.currentTimeMillis();
         }
     }
 
@@ -59,7 +61,8 @@ public class ConnectionRecord {
     }
 
     public long getDurationSec() {
-        return (System.currentTimeMillis() - startTime) / 1000;
+        long end = (endTime != 0) ? endTime : System.currentTimeMillis();
+        return (end - startTime) / 1000;
     }
 
     public String getDisplayHost() {

@@ -53,7 +53,15 @@ public final class ConnectionLifecycleManager {
         }
         sessionCtx.markDestroyed();
 
-        Log.i(TAG, "Destroying session");
+        // 计算并记录连接用时（精确到秒）
+        ConnectionRecord r = sessionCtx.record;
+        long secs = r.getDurationSec();
+        long m = secs / 60;
+        long s = secs % 60;
+        String durationStr = m > 0 ? m + "m" + s + "s" : s + "s";
+        Log.i(TAG, r.protocol + " " + r.targetHost + ":" + r.targetPort
+                + " ended, duration=" + durationStr
+                + " ↓" + formatBytes(r.getBytesUp()) + " ↑" + formatBytes(r.getBytesDown()));
 
         Channel client = sessionCtx.clientChannel;
         Channel target = sessionCtx.targetChannel;
@@ -67,13 +75,20 @@ public final class ConnectionLifecycleManager {
             target.close();
         }
 
-        // 标记 record 为已结束（问题2修复：立即标记，UI 立即变灰）
+        // 标记 record 为已结束
         sessionCtx.record.setEnded();
 
         // 移除注册
         if (client != null) {
             contexts.remove(client.id());
         }
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 0) return "--";
+        if (bytes < 1024) return bytes + "B";
+        if (bytes < 1024 * 1024) return String.format("%.1fKB", bytes / 1024.0);
+        return String.format("%.1fMB", bytes / (1024.0 * 1024));
     }
 
     /**
