@@ -132,31 +132,11 @@ void Forwarder::relay(SOCKET clientSock) {
            dest.c_str(), ch->localId, ch->remoteId);
 
     while (m_running) {
-        // 客户端 → ADB
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(clientSock, &fds);
-        timeval tv = {0, 100000};
-        int selRet = select(0, &fds, nullptr, nullptr, &tv);
-
-        if (selRet > 0 && FD_ISSET(clientSock, &fds)) {
-            char buf[8192];
-            int n = recv(clientSock, buf, sizeof(buf), 0);
-            if (n > 0) {
-                if (!m_client.writeChannel(ch, buf, n)) {
-                    printf("FWD: ADB write failed\n");
-                    break;
-                }
-            } else {
-                printf("FWD: Client disconnected (%d)\n", n);
-                break;
-            }
-        }
-
-        // ADB → 客户端（读 channel 队列 + 条件变量）
+        // 1. 优先排空 ADB → 客户端（高吞吐方向）
+        //    一次性取完队列中所有待发数据，不停留在 select 里空等
         {
             std::unique_lock<std::mutex> lock(ch->mtx);
-            if (!ch->dataQueue.empty()) {
+            while (!ch->dataQueue.empty()) {
                 auto data = std::move(ch->dataQueue.front());
                 ch->dataQueue.pop();
                 lock.unlock();
@@ -165,17 +145,53 @@ void Forwarder::relay(SOCKET clientSock) {
                                (int)data.size(), 0);
                 if (sent == SOCKET_ERROR) {
                     printf("FWD: send() to client failed: %d\n", WSAGetLastError());
-                    break;
+                    goto done;
                 }
-            } else if (ch->closed) {
+
+                lock.lock();
+            }
+            if (ch->closed) {
                 printf("FWD: Channel closed by device\n");
                 break;
-            } else {
-                ch->cv.wait_for(lock, std::chrono::milliseconds(50));
+            }
+        }
+
+        // 2. 客户端 → ADB（非阻塞排空，不拖延下行）
+        {
+            while (true) {
+                fd_set fds;
+                FD_ZERO(&fds);
+                FD_SET(clientSock, &fds);
+                timeval tv = {0, 0};
+                if (select(0, &fds, nullptr, nullptr, &tv) <= 0) break;
+
+                char buf[8192];
+                int n = recv(clientSock, buf, sizeof(buf), 0);
+                if (n > 0) {
+                    if (!m_client.writeChannel(ch, buf, n)) {
+                        printf("FWD: ADB write failed\n");
+                        goto done;
+                    }
+                } else if (n == 0) {
+                    printf("FWD: Client disconnected\n");
+                    goto done;
+                } else {
+                    break; // WSAEWOULDBLOCK
+                }
+            }
+        }
+
+        // 3. 等待新数据：Reader 线程 push 数据后会 notify_one()，
+        //    cv.wait_for 能立即被唤醒，延迟接近零
+        {
+            std::unique_lock<std::mutex> lock(ch->mtx);
+            if (ch->dataQueue.empty() && !ch->closed) {
+                ch->cv.wait_for(lock, std::chrono::milliseconds(100));
             }
         }
     }
 
+done:
     m_client.closeChannel(ch);
     closesocket(clientSock);
     releaseSlot();
