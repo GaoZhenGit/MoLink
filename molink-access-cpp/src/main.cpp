@@ -8,6 +8,7 @@
 
 #include "daemon/daemon_app.h"
 #include "cli/cli_utils.h"
+#include "version.h"
 
 // ---- 全局（Ctrl+C 用） ----
 static Forwarder* g_forwarder = nullptr;
@@ -209,6 +210,7 @@ static void printUsage() {
            "  molink stop                       Stop running daemon\n"
            "  molink status                     Show daemon status\n"
            "  molink devices                    List USB ADB devices\n"
+           "  molink --version, -v              Show version\n"
            "\n"
            "  molink forward  [options]         Start TCP port forwarding\n"
            "\n"
@@ -245,6 +247,10 @@ int main(int argc, char* argv[]) {
 
     if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
         printUsage();
+        return 0;
+    }
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+        printVersion();
         return 0;
     }
 

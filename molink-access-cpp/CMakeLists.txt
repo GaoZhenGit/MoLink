@@ -10,10 +10,19 @@ set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
 
 include_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/include)
 include_directories(${CMAKE_SOURCE_DIR}/src/utils)
+include_directories(${CMAKE_BINARY_DIR})  # for generated version.h
 link_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/lib)
+
+# 每次构建生成 version_gen.h（使用构建时的时间戳）
+set(VERSION_GEN_H "${CMAKE_BINARY_DIR}/version_gen.h")
+add_custom_target(gen_version ALL
+    ${CMAKE_COMMAND} -DOUTPUT_FILE=${VERSION_GEN_H} -P ${CMAKE_SOURCE_DIR}/version.cmake
+    COMMENT "Generating version header..."
+)
 
 add_executable(molink
     src/main.cpp
+    src/version.cpp
     src/usb/usb_device.cpp
     src/adb/adb_transport.cpp
     src/adb/adb_rsa.cpp
@@ -38,3 +47,4 @@ add_executable(molink
 )
 
 target_link_libraries(molink libusb-1.0.a ws2_32 bcrypt crypt32 winusb setupapi ole32)
+add_dependencies(molink gen_version)
