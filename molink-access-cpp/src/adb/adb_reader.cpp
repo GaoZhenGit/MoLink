@@ -29,11 +29,12 @@ void AdbReader::readLoop() {
         AdbMessage msg;
         std::vector<uint8_t> data;
         if (!m_transport->recv(msg, data, 100)) {
-            // Only trigger disconnect on fatal USB errors (NO_DEVICE, IO),
-            // not on normal timeouts (which happen during idle).
-            if (m_transport->hadFatalError() && m_onDisconnect) {
+            // Trigger disconnect on fatal USB errors or protocol errors (bad magic, etc.)
+            // Normal timeouts during idle are NOT fatal.
+            if ((m_transport->hadFatalError() || m_transport->hadProtocolError()) && m_onDisconnect) {
+                printf("ADB: Fatal error (USB=%d protocol=%d), disconnecting...\n",
+                       m_transport->hadFatalError(), m_transport->hadProtocolError());
                 m_onDisconnect();
-                // Wait until stop() is called (transition to DISCONNECTED)
                 while (m_running) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }

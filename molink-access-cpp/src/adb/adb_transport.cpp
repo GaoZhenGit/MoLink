@@ -65,24 +65,34 @@ bool AdbTransport::recv(AdbMessage& msg, std::vector<uint8_t>& data,
                          uint32_t timeout_ms) {
     data.clear();
 
+    // 读 header 用调用者的 timeout（24 bytes 很快）
     if (!readExact(&msg, sizeof(msg), timeout_ms))
         return false;
 
     if (msg.magic != (msg.command ^ 0xFFFFFFFF)) {
         printf("FAIL: bad magic, got 0x%08X expect 0x%08X\n",
                msg.magic, msg.command ^ 0xFFFFFFFF);
+        m_protocolError = true;
         return false;
     }
 
     if (msg.data_length > MAX_PAYLOAD_V2) {
         printf("FAIL: payload too large: %u\n", msg.data_length);
+        m_protocolError = true;
         return false;
     }
 
     if (msg.data_length > 0) {
         printf("ADB RECV: reading %u bytes data...\n", msg.data_length);
         data.resize(msg.data_length);
-        if (!readExact(data.data(), msg.data_length, timeout_ms)) return false;
+        // payload 用长超时：header 已校验通过，adbd 已将完整 payload 缓冲好，
+        // USB 传输本身是硬件速度（256KB 在 USB 2.0 上 ~8ms）。
+        // 若用短超时（如 100ms），readExact 中途超时返回 false 后会丢弃已消费
+        // 的部分数据，下一次 recv() 从 payload 中间开始读 → bad magic 雪崩。
+        // 30s 覆盖 USB 1.1 全速（~1.5MB/s）下 1MB payload 的极端情况。
+        const uint32_t kPayloadTimeout = 30000;
+        if (!readExact(data.data(), msg.data_length, kPayloadTimeout))
+            return false;
     }
     return true;
 }

@@ -58,6 +58,8 @@ public:
     void closeChannel(uint32_t local_id, uint32_t remote_id);
 
     bool hadFatalError() const;
+    bool hadProtocolError() const { return m_protocolError; }
+    void clearProtocolError() { m_protocolError = false; }
     const std::vector<uint8_t>& getAuthToken() const { return m_auth_token; }
     static uint32_t checksum(const uint8_t* data, uint32_t len) {
         uint32_t sum = 0;
@@ -68,6 +70,7 @@ public:
 private:
     UsbDevice& m_device;
     std::vector<uint8_t> m_auth_token;
+    bool m_protocolError = false;
 
     bool readExact(void* buf, uint32_t len, uint32_t timeout_ms);
     bool writeExact(const void* buf, uint32_t len, uint32_t timeout_ms);
