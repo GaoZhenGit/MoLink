@@ -123,9 +123,13 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
 
         private static String formatDuration(long secs) {
             if (secs < 0) return "0s";
-            if (secs < 60) return "1\u5206\u5185";
-            if (secs < 3600) return (secs / 60) + "m";
-            return String.format("%.1fh", secs / 3600.0);
+            long m = secs / 60;
+            long s = secs % 60;
+            if (m == 0) return s + "s";
+            if (secs < 3600) return m + "m" + s + "s";
+            long h = secs / 3600;
+            long hm = (secs % 3600) / 60;
+            return h + "h" + hm + "m";
         }
     }
 }
