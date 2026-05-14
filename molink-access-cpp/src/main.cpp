@@ -50,7 +50,7 @@ std::string sendPipeCmd(const std::string& cmd) {
 static int cmdStatus() {
     auto resp = sendPipeCmd("status");
     if (resp.empty()) {
-        printf("Daemon is not running.\n");
+        printf("daemon=stopped\n");
         return 1;
     }
     printf("%s\n", resp.c_str());

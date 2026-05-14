@@ -3,5 +3,5 @@
 #include <cstdio>
 
 void printVersion() {
-    printf("molink %s\n", MOLINK_VERSION);
+    printf("%s\n", MOLINK_VERSION);
 }

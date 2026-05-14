@@ -99,7 +99,7 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
             ? "connected" : "disconnected";
         if (m_forwarder) {
             snprintf(buf, sizeof(buf),
-                     "%s  serial=%s  forwarding=%u->%u  connections=%d",
+                     "daemon=running state=%s serial=%s forwarding=%u->%u connections=%d",
                      stateStr,
                      m_client.getSerial().c_str(),
                      m_forwarder->getLocalPort(),
@@ -107,7 +107,7 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
                      m_forwarder->getConnectionCount());
         } else {
             snprintf(buf, sizeof(buf),
-                     "%s  serial=%s  forwarding=off",
+                     "daemon=running state=%s serial=%s forwarding=off",
                      stateStr,
                      m_client.getSerial().c_str());
         }
