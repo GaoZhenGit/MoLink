@@ -1,8 +1,9 @@
-#include "file_pull.h"
+﻿#include "file_pull.h"
 #include "../adb/adb_client.h"
 #include "../adb/adb_reader.h"
 #include "../adb/adb_sync.h"
 #include <cstdio>
+#include "log.h"
 #include <cstring>
 
 std::string pullFile(AdbClient& client,
@@ -47,10 +48,10 @@ std::string pullFile(AdbClient& client,
         if (msg.id == SYNC_DATA) {
             fwrite(payload.data(), 1, payload.size(), f);
             totalReceived += payload.size();
-            printf("PULL: Received %lld bytes...\r", totalReceived);
+            LOG_DEBUG("PULL", "Received %lld bytes...\r", totalReceived);
         } else if (msg.id == SYNC_DONE) {
             done = true;
-            printf("PULL: DONE, total %lld bytes\n", totalReceived);
+            LOG_DEBUG("PULL", "DONE, total %lld bytes", totalReceived);
             break;
         } else if (msg.id == SYNC_FAIL) {
             std::string err(payload.begin(), payload.end());

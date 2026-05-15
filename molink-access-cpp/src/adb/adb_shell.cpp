@@ -1,6 +1,7 @@
 #include "adb_shell.h"
 #include "adb_client.h"
 #include "adb_reader.h"
+#include "log.h"
 #include <cstdio>
 #include <chrono>
 
@@ -8,7 +9,7 @@ std::string shellCommand(AdbClient& client, const std::string& command) {
     std::string dest = "shell:" + command;
     auto ch = client.openChannel(dest);
     if (!ch) {
-        printf("SHELL: Failed to open channel: %s\n", dest.c_str());
+        LOG_ERROR("SHELL", "failed to open channel: %s", dest.c_str());
         return "fail: Could not open shell channel";
     }
 

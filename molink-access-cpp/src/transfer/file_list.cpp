@@ -1,7 +1,8 @@
-#include "file_list.h"
+﻿#include "file_list.h"
 #include "../adb/adb_client.h"
 #include "../adb/adb_shell.h"
 #include <cstdio>
+#include "log.h"
 
 std::string listFiles(AdbClient& client, const std::string& remotePath) {
     std::string path = remotePath.empty() ? "/sdcard/" : remotePath;

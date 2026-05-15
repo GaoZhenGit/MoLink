@@ -1,4 +1,4 @@
-#include "adb_rsa.h"
+﻿#include "adb_rsa.h"
 #include "log.h"
 #include <cstdio>
 #include <cstring>
@@ -43,13 +43,13 @@ bool AdbRsa::generateKey() {
 
     NTSTATUS status = BCryptOpenAlgorithmProvider(&m_alg, BCRYPT_RSA_ALGORITHM, nullptr, 0);
     if (status != 0) {
-        printf("RSA: BCryptOpenAlgorithmProvider failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "BCryptOpenAlgorithmProvider failed: 0x%08X", (unsigned)status);
         return false;
     }
 
     status = BCryptGenerateKeyPair(m_alg, &m_key, 2048, 0);
     if (status != 0) {
-        printf("RSA: BCryptGenerateKeyPair failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "BCryptGenerateKeyPair failed: 0x%08X", (unsigned)status);
         BCryptCloseAlgorithmProvider(m_alg, 0);
         m_alg = nullptr;
         return false;
@@ -57,7 +57,7 @@ bool AdbRsa::generateKey() {
 
     status = BCryptFinalizeKeyPair(m_key, 0);
     if (status != 0) {
-        printf("RSA: BCryptFinalizeKeyPair failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "BCryptFinalizeKeyPair failed: 0x%08X", (unsigned)status);
         BCryptDestroyKey(m_key);
         BCryptCloseAlgorithmProvider(m_alg, 0);
         m_key = nullptr;
@@ -84,12 +84,12 @@ bool AdbRsa::generateKey() {
             // 去掉 modulus 前导零
             while (!m_cachedModulus.empty() && m_cachedModulus[0] == 0)
                 m_cachedModulus.erase(m_cachedModulus.begin());
-            printf("RSA: Cached n=%zu bytes, e=%zu bytes from BCrypt\n",
+            LOG_DEBUG("RSA", "Cached n=%zu bytes, e=%zu bytes from BCrypt",
                    m_cachedModulus.size(), m_cachedExp.size());
         }
     }
 
-    printf("RSA: 2048-bit key pair generated (BCrypt)\n");
+    LOG_INFO("RSA", "2048-bit key pair generated (BCrypt)");
     return true;
 }
 
@@ -100,7 +100,7 @@ std::vector<uint8_t> AdbRsa::exportKeyBlob() {
     NTSTATUS status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAFULLPRIVATE_BLOB,
                                        nullptr, 0, &size, 0);
     if (status != 0 || size == 0) {
-        printf("RSA: ExportKey size query failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "ExportKey size query failed: 0x%08X", (unsigned)status);
         return {};
     }
 
@@ -108,7 +108,7 @@ std::vector<uint8_t> AdbRsa::exportKeyBlob() {
     status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAFULLPRIVATE_BLOB,
                               blob.data(), size, &size, 0);
     if (status != 0) {
-        printf("RSA: ExportKey failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "ExportKey failed: 0x%08X", (unsigned)status);
         return {};
     }
     return blob;
@@ -118,7 +118,7 @@ bool AdbRsa::importKeyBlob(const uint8_t* blob, size_t len) {
     if (!m_alg) {
         NTSTATUS status = BCryptOpenAlgorithmProvider(&m_alg, BCRYPT_RSA_ALGORITHM, nullptr, 0);
         if (status != 0) {
-            printf("RSA: BCryptOpenAlgorithmProvider failed: 0x%08X\n", (unsigned)status);
+            LOG_ERROR("RSA", "BCryptOpenAlgorithmProvider failed: 0x%08X", (unsigned)status);
             return false;
         }
     }
@@ -133,7 +133,7 @@ bool AdbRsa::importKeyBlob(const uint8_t* blob, size_t len) {
     NTSTATUS status = BCryptImportKeyPair(m_alg, nullptr, BCRYPT_RSAFULLPRIVATE_BLOB,
                                            &m_key, (PUCHAR)blob, (ULONG)len, 0);
     if (status != 0) {
-        printf("RSA: ImportKeyPair failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "ImportKeyPair failed: 0x%08X", (unsigned)status);
         return false;
     }
 
@@ -154,12 +154,12 @@ bool AdbRsa::importKeyBlob(const uint8_t* blob, size_t len) {
             while (m_cachedExp.size() < 4) m_cachedExp.insert(m_cachedExp.begin(), 0);
             while (!m_cachedModulus.empty() && m_cachedModulus[0] == 0)
                 m_cachedModulus.erase(m_cachedModulus.begin());
-            printf("RSA: Cached n=%zu bytes, e=%zu bytes from imported key\n",
+            LOG_INFO("RSA", "Cached n=%zu bytes, e=%zu bytes from imported key",
                    m_cachedModulus.size(), m_cachedExp.size());
         }
     }
 
-    printf("RSA: Key pair imported (%zu bytes)\n", len);
+    LOG_INFO("RSA", "Key pair imported (%zu bytes)", len);
     return true;
 }
 
@@ -169,7 +169,7 @@ bool AdbRsa::saveKey(const std::string& path) {
 
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) {
-        printf("RSA: Cannot open %s for writing\n", path.c_str());
+        LOG_ERROR("RSA", "Cannot open %s for writing", path.c_str());
         return false;
     }
 
@@ -177,11 +177,11 @@ bool AdbRsa::saveKey(const std::string& path) {
     fclose(f);
 
     if (written != blob.size()) {
-        printf("RSA: Write failed (%zu/%zu bytes)\n", written, blob.size());
+        LOG_ERROR("RSA", "Write failed (%zu/%zu bytes)", written, blob.size());
         return false;
     }
 
-    printf("RSA: Key saved to %s (%zu bytes)\n", path.c_str(), blob.size());
+    LOG_INFO("RSA", "Key saved to %s (%zu bytes)", path.c_str(), blob.size());
     return true;
 }
 
@@ -211,13 +211,13 @@ bool AdbRsa::loadPkcs8(const std::string& path) {
     DWORD derLen = 0;
     if (!CryptStringToBinaryA(b64.c_str(), (DWORD)b64.size(),
                                CRYPT_STRING_BASE64, nullptr, &derLen, nullptr, nullptr)) {
-        printf("RSA: Base64 decode size failed: %lu\n", GetLastError());
+        LOG_ERROR("RSA", "Base64 decode size failed: %lu", GetLastError());
         return false;
     }
     std::vector<uint8_t> der(derLen);
     if (!CryptStringToBinaryA(b64.c_str(), (DWORD)b64.size(),
                                CRYPT_STRING_BASE64, der.data(), &derLen, nullptr, nullptr)) {
-        printf("RSA: Base64 decode failed: %lu\n", GetLastError());
+        LOG_ERROR("RSA", "Base64 decode failed: %lu", GetLastError());
         return false;
     }
 
@@ -300,20 +300,20 @@ bool AdbRsa::loadPkcs8(const std::string& path) {
 
     NTSTATUS status = BCryptOpenAlgorithmProvider(&m_alg, BCRYPT_RSA_ALGORITHM, nullptr, 0);
     if (status != 0) {
-        printf("RSA: BCryptOpenAlgorithmProvider failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "BCryptOpenAlgorithmProvider failed: 0x%08X", (unsigned)status);
         return false;
     }
 
     status = BCryptImportKeyPair(m_alg, nullptr, BCRYPT_RSAPRIVATE_BLOB,
                                    &m_key, blob.data(), (ULONG)blob.size(), 0);
     if (status != 0) {
-        printf("RSA: BCryptImportKeyPair failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "BCryptImportKeyPair failed: 0x%08X", (unsigned)status);
         BCryptCloseAlgorithmProvider(m_alg, 0);
         m_alg = nullptr;
         return false;
     }
 
-    printf("RSA: Adb key imported via BCrypt (n=%zu e=%zu d=%zu p=%zu q=%zu)\n",
+    LOG_INFO("RSA", "Adb key imported via BCrypt (n=%zu e=%zu d=%zu p=%zu q=%zu)",
            n.size(), e.size(), d.size(), p.size(), q.size());
     return true;
 }
@@ -321,7 +321,7 @@ bool AdbRsa::loadPkcs8(const std::string& path) {
 bool AdbRsa::loadKey(const std::string& path) {
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) {
-        printf("RSA: Key file not found: %s\n", path.c_str());
+        LOG_WARN("RSA", "Key file not found: %s", path.c_str());
         return false;
     }
 
@@ -330,7 +330,7 @@ bool AdbRsa::loadKey(const std::string& path) {
     fseek(f, 0, SEEK_SET);
 
     if (size <= 0 || size > 8192) {
-        printf("RSA: Invalid key file size: %ld\n", size);
+        LOG_ERROR("RSA", "Invalid key file size: %ld", size);
         fclose(f);
         return false;
     }
@@ -340,7 +340,7 @@ bool AdbRsa::loadKey(const std::string& path) {
     fclose(f);
 
     if (read != (size_t)size) {
-        printf("RSA: Read failed (%zu/%ld bytes)\n", read, size);
+        LOG_ERROR("RSA", "Read failed (%zu/%ld bytes)", read, size);
         return false;
     }
 
@@ -349,12 +349,12 @@ bool AdbRsa::loadKey(const std::string& path) {
 
 std::vector<uint8_t> AdbRsa::signToken(const uint8_t* token, size_t token_len) {
     if (!m_key) {
-        printf("RSA: No key for signing\n");
+        LOG_ERROR("RSA", "No key for signing");
         return {};
     }
 
     if (token_len != 20) {
-        printf("RSA: Expected 20-byte token, got %zu\n", token_len);
+        LOG_ERROR("RSA", "Expected 20-byte token, got %zu", token_len);
         return {};
     }
 
@@ -386,11 +386,11 @@ std::vector<uint8_t> AdbRsa::signToken(const uint8_t* token, size_t token_len) {
                                      sig.data(), sigSize, &sigSize,
                                      BCRYPT_PAD_NONE);
     if (status != 0) {
-        printf("RSA: BCryptDecrypt (raw PKCS#1 v1.5) failed: 0x%08X\n", (unsigned)status);
+        LOG_ERROR("RSA", "BCryptDecrypt (raw PKCS#1 v1.5) failed: 0x%08X", (unsigned)status);
         return {};
     }
 
-    printf("RSA: Token signed via raw PKCS#1 v1.5 (%lu bytes)\n", sigSize);
+    LOG_DEBUG("RSA", "Token signed via raw PKCS#1 v1.5 (%lu bytes)", sigSize);
     return sig;
 }
 
@@ -406,7 +406,7 @@ std::vector<uint8_t> AdbRsa::getPublicKey(const std::string& user) {
         NTSTATUS status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
                                            nullptr, 0, &blobSize, 0);
         if (status != 0 || blobSize == 0) {
-            printf("RSA: Export public key size failed: 0x%08X\n", (unsigned)status);
+            LOG_ERROR("RSA", "Export public key size failed: 0x%08X", (unsigned)status);
             return {};
         }
 
@@ -414,7 +414,7 @@ std::vector<uint8_t> AdbRsa::getPublicKey(const std::string& user) {
         status = BCryptExportKey(m_key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
                                   blob.data(), blobSize, &blobSize, 0);
         if (status != 0) {
-            printf("RSA: Export public key failed: 0x%08X\n", (unsigned)status);
+            LOG_ERROR("RSA", "Export public key failed: 0x%08X", (unsigned)status);
             return {};
         }
 
@@ -445,7 +445,7 @@ std::vector<uint8_t> AdbRsa::getPublicKey(const std::string& user) {
     for (size_t i = 0; i < modulus.size(); i++)
         result[nameLen + 4 + i] = modulus[modulus.size() - 1 - i];
 
-    printf("RSA: Public key exported (%zu bytes, exp=%zu bytes, mod=%zu bytes, user=%s)\n",
+    LOG_DEBUG("RSA", "Public key exported (%zu bytes, exp=%zu bytes, mod=%zu bytes, user=%s)",
            result.size(), pubExp.size(), modulus.size(), user.c_str());
 
     return result;
@@ -633,7 +633,7 @@ static uint32_t modinv32(uint32_t a) {
 
 std::vector<uint8_t> AdbRsa::buildRsaPublicKey() {
     if (m_cachedModulus.size() < 256 || m_cachedExp.size() < 4) {
-        printf("RSA: No cached key params for RSAPublicKey\n");
+        LOG_DEBUG("RSA", "No cached key params for RSAPublicKey");
         return {};
     }
 
@@ -738,7 +738,7 @@ std::vector<uint8_t> AdbRsa::buildRsaPublicKey() {
         exp |= ((uint32_t)m_cachedExp[m_cachedExp.size() - 1 - i]) << (i * 8);
     memcpy(result.data() + off, &exp, 4); off += 4;
 
-    printf("RSA: RSAPublicKey built (%zu bytes, n0inv=0x%08X, exp=0x%X)\n",
+    LOG_DEBUG("RSA", "RSAPublicKey built (%zu bytes, n0inv=0x%08X, exp=0x%X)",
            result.size(), n0inv, exp);
     return result;
 }
@@ -764,7 +764,7 @@ std::string AdbRsa::base64Encode(const uint8_t* data, size_t len) {
 
 std::string AdbRsa::getPubKeyPayload() {
     if (!isReady()) {
-        printf("RSA: Key not ready, cannot build RSAPublicKey\n");
+        LOG_ERROR("RSA", "Key not ready, cannot build RSAPublicKey");
         return {};
     }
 
@@ -786,12 +786,12 @@ std::string AdbRsa::getPubKeyPayload() {
                 while (m_cachedExp.size() < 4) m_cachedExp.insert(m_cachedExp.begin(), 0);
                 while (!m_cachedModulus.empty() && m_cachedModulus[0] == 0)
                     m_cachedModulus.erase(m_cachedModulus.begin());
-                printf("RSA: Exported n=%zu bytes, e=%zu bytes from loaded key\n",
+                LOG_DEBUG("RSA", "Exported n=%zu bytes, e=%zu bytes from loaded key",
                        m_cachedModulus.size(), m_cachedExp.size());
             }
         }
         if (m_cachedModulus.empty()) {
-            printf("RSA: Cannot export public key parameters\n");
+            LOG_ERROR("RSA", "Cannot export public key parameters");
             return {};
         }
     }
@@ -811,6 +811,6 @@ std::string AdbRsa::getPubKeyPayload() {
 
     std::string result = b64 + " " + std::string(user) + "@" + std::string(computer);
     result += '\0';
-    printf("RSA: Built AUTH_RSAPUBLICKEY payload (%zu bytes)\n", result.size());
+    LOG_DEBUG("RSA", "Built AUTH_RSAPUBLICKEY payload (%zu bytes)", result.size());
     return result;
 }

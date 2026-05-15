@@ -1,8 +1,9 @@
-#include "file_push.h"
+﻿#include "file_push.h"
 #include "../adb/adb_client.h"
 #include "../adb/adb_reader.h"
 #include "../adb/adb_sync.h"
 #include <cstdio>
+#include "log.h"
 #include <cstring>
 #include <sys/stat.h>
 
@@ -45,7 +46,7 @@ std::string pushFile(AdbClient& client,
             client.closeChannel(ch);
             return "fail: USB write error sending SEND";
         }
-        printf("PUSH: SEND %s\n", sendBuf);
+        LOG_DEBUG("PUSH", "SEND %s", sendBuf);
     }
 
     constexpr size_t kChunkSize = 65536;
@@ -72,9 +73,9 @@ std::string pushFile(AdbClient& client,
             return "fail: USB write error during push";
         }
         totalSent += n;
-        printf("PUSH: Sent %lld bytes...\r", totalSent);
+        LOG_DEBUG("PUSH", "Sent %lld bytes...\r", totalSent);
     }
-    printf("\nPUSH: Total %lld bytes sent\n", totalSent);
+    LOG_INFO("PUSH", "total %lld bytes sent", totalSent);
     fclose(f);
 
     uint32_t mtime = (uint32_t)st.st_mtime;
@@ -90,7 +91,7 @@ std::string pushFile(AdbClient& client,
             client.closeChannel(ch);
             return "fail: USB write error sending DONE";
         }
-        printf("PUSH: DONE sent (mtime=%u)\n", mtime);
+        LOG_DEBUG("PUSH", "DONE sent (mtime=%u)", mtime);
     }
 
     // Now wait for the final response

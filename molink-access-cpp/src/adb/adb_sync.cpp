@@ -1,7 +1,8 @@
-#include "adb_sync.h"
+﻿#include "adb_sync.h"
 #include "adb_reader.h"
 #include "adb_client.h"
 #include <cstdio>
+#include "log.h"
 #include <cstring>
 #include <algorithm>
 #include <chrono>
@@ -92,12 +93,12 @@ bool syncReadResponse(ChannelPtr ch, SyncMsg& msg,
         }
 
         if (ch->closed && ch->dataQueue.empty()) {
-            printf("SYNC: Channel closed by device\n");
+            LOG_WARN("SYNC", "Channel closed by device");
             return false;
         }
         ch->cv.wait_for(lock, std::chrono::milliseconds(100));
     }
-    printf("SYNC: Read timeout (%d ms)\n", timeoutMs);
+    LOG_DEBUG("SYNC", "Read timeout (%d ms)", timeoutMs);
     return false;
 }
 
@@ -108,7 +109,7 @@ bool syncSend(AdbClient& client, ChannelPtr ch,
     uint32_t len = (uint32_t)strlen(buf);
 
     if (!sendSyncMsg(client, ch, SYNC_SEND, buf, len)) {
-        printf("SYNC: Failed to send SEND\n");
+        LOG_ERROR("SYNC", "Failed to send SEND");
         return false;
     }
 
@@ -117,11 +118,11 @@ bool syncSend(AdbClient& client, ChannelPtr ch,
     if (!syncReadResponse(ch, resp, payload, 60000)) return false;
     if (resp.id == SYNC_FAIL) {
         std::string err(payload.begin(), payload.end());
-        printf("SYNC: SEND failed: %s\n", err.c_str());
+        LOG_ERROR("SYNC", "SEND failed: %s", err.c_str());
         return false;
     }
     if (resp.id != SYNC_OKAY) {
-        printf("SYNC: Expected OKAY, got 0x%08X\n", resp.id);
+        LOG_ERROR("SYNC", "Expected OKAY, got 0x%08X", resp.id);
         return false;
     }
     return true;
@@ -131,7 +132,7 @@ bool syncRecv(AdbClient& client, ChannelPtr ch,
               const std::string& remotePath) {
     uint32_t len = (uint32_t)remotePath.size();
     if (!sendSyncMsg(client, ch, SYNC_RECV, remotePath.data(), len)) {
-        printf("SYNC: Failed to send RECV\n");
+        LOG_ERROR("SYNC", "Failed to send RECV");
         return false;
     }
     return true;
