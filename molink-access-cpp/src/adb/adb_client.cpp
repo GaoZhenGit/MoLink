@@ -110,6 +110,12 @@ bool AdbClient::connect(const std::string& serial) {
                 LOG_ERROR("ADB", "cannot re-open device");
                 return false;
             }
+            // 重新打开后必须清空残留数据，否则下一次 handshake
+            // 会读到旧 session 的消息（A_CLSE、过期 TOKEN 等），
+            // 导致握手反复失败，设备重复弹授权窗。
+            selected->clearHalt(selected->getReadEndpoint());
+            selected->clearHalt(selected->getWriteEndpoint());
+            selected->drainRead();
         }
     }
 
