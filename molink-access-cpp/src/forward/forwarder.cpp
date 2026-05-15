@@ -1,4 +1,5 @@
 #include "forwarder.h"
+#include "log.h"
 #include <cstdio>
 
 Forwarder::Forwarder(AdbClient& client, uint16_t localPort, uint16_t remotePort)
@@ -12,7 +13,7 @@ bool Forwarder::start() {
     if (m_running) return true;
 
     if (!m_client.isConnected()) {
-        printf("FWD: ADB not connected\n");
+        LOG_ERROR("FWD", "ADB not connected");
         return false;
     }
 
@@ -21,7 +22,7 @@ bool Forwarder::start() {
 
     m_listenSock = socket(AF_INET, SOCK_STREAM, 0);
     if (m_listenSock == INVALID_SOCKET) {
-        printf("FWD: socket() failed: %d\n", WSAGetLastError());
+        LOG_ERROR("FWD", "socket failed: %d", WSAGetLastError());
         return false;
     }
 
@@ -31,14 +32,14 @@ bool Forwarder::start() {
     addr.sin_port = htons(m_localPort);
 
     if (bind(m_listenSock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        printf("FWD: bind(:%u) failed: %d\n", m_localPort, WSAGetLastError());
+        LOG_ERROR("FWD", "bind :%u failed: %d", m_localPort, WSAGetLastError());
         closesocket(m_listenSock);
         m_listenSock = INVALID_SOCKET;
         return false;
     }
 
     if (listen(m_listenSock, SOMAXCONN) == SOCKET_ERROR) {
-        printf("FWD: listen() failed: %d\n", WSAGetLastError());
+        LOG_ERROR("FWD", "listen failed: %d", WSAGetLastError());
         closesocket(m_listenSock);
         m_listenSock = INVALID_SOCKET;
         return false;
@@ -46,8 +47,8 @@ bool Forwarder::start() {
 
     m_running = true;
     m_thread = std::thread(&Forwarder::acceptLoop, this);
-    printf("FWD: Listening on 127.0.0.1:%u → device tcp:%u (max %d conn)\n",
-           m_localPort, m_remotePort, kMaxConnections);
+    LOG_INFO("FWD", "listening 127.0.0.1:%u -> device tcp:%u max %d",
+             m_localPort, m_remotePort, kMaxConnections);
     return true;
 }
 
@@ -63,7 +64,6 @@ void Forwarder::stop() {
 }
 
 int Forwarder::getConnectionCount() const {
-    // m_activeCount 只在 slot mutex 里改，这里给个近似值
     return m_activeCount;
 }
 
@@ -81,18 +81,18 @@ void Forwarder::releaseSlot() {
 
 void Forwarder::pause() {
     m_paused = true;
-    printf("FWD: Paused (device disconnected), waiting for %d active relays...\n", m_activeCount);
+    LOG_INFO("FWD", "paused, %d active relays", m_activeCount);
     for (int i = 0; i < 15 && m_activeCount > 0; i++) {
         Sleep(100);
     }
     if (m_activeCount > 0) {
-        printf("FWD: Warning — %d relays still active after 1.5s\n", m_activeCount);
+        LOG_WARN("FWD", "%d relays still active after 1.5s", m_activeCount);
     }
 }
 
 void Forwarder::resume() {
     m_paused = false;
-    printf("FWD: Resumed\n");
+    LOG_INFO("FWD", "resumed");
 }
 
 void Forwarder::acceptLoop() {
@@ -103,17 +103,17 @@ void Forwarder::acceptLoop() {
         }
         SOCKET clientSock = accept(m_listenSock, nullptr, nullptr);
         if (clientSock == INVALID_SOCKET) {
-            if (m_running) printf("FWD: accept() failed: %d\n", WSAGetLastError());
+            if (m_running) LOG_ERROR("FWD", "accept failed: %d", WSAGetLastError());
             break;
         }
 
         if (!tryAcquireSlot()) {
-            printf("FWD: Too many connections, rejecting\n");
+            LOG_WARN("FWD", "too many connections, rejecting");
             closesocket(clientSock);
             continue;
         }
 
-        printf("FWD: Client connected (%d active)\n", m_activeCount);
+        LOG_INFO("FWD", "client connected (%d active)", m_activeCount);
         std::thread(&Forwarder::relay, this, clientSock).detach();
     }
 }
@@ -123,17 +123,18 @@ void Forwarder::relay(SOCKET clientSock) {
 
     auto ch = m_client.openChannel(dest);
     if (!ch) {
-        printf("FWD: Failed to open ADB channel to %s\n", dest.c_str());
+        LOG_ERROR("FWD", "failed to open channel to %s", dest.c_str());
         closesocket(clientSock);
         releaseSlot();
         return;
     }
-    printf("FWD: Channel to %s opened (local=%u remote=%u)\n",
-           dest.c_str(), ch->localId, ch->remoteId);
+
+    char tag[32];
+    snprintf(tag, sizeof(tag), "FWD:%u/%u", ch->localId, ch->remoteId);
+    LOG_INFO(tag, "channel to %s opened", dest.c_str());
 
     while (m_running) {
         // 1. 优先排空 ADB → 客户端（高吞吐方向）
-        //    一次性取完队列中所有待发数据，不停留在 select 里空等
         {
             std::unique_lock<std::mutex> lock(ch->mtx);
             while (!ch->dataQueue.empty()) {
@@ -144,19 +145,19 @@ void Forwarder::relay(SOCKET clientSock) {
                 int sent = send(clientSock, (const char*)data.data(),
                                (int)data.size(), 0);
                 if (sent == SOCKET_ERROR) {
-                    printf("FWD: send() to client failed: %d\n", WSAGetLastError());
+                    LOG_ERROR(tag, "send to client failed: %d", WSAGetLastError());
                     goto done;
                 }
 
                 lock.lock();
             }
             if (ch->closed) {
-                printf("FWD: Channel closed by device\n");
+                LOG_WARN(tag, "channel closed by device");
                 break;
             }
         }
 
-        // 2. 客户端 → ADB（非阻塞排空，不拖延下行）
+        // 2. 客户端 → ADB（非阻塞排空）
         {
             while (true) {
                 fd_set fds;
@@ -169,20 +170,19 @@ void Forwarder::relay(SOCKET clientSock) {
                 int n = recv(clientSock, buf, sizeof(buf), 0);
                 if (n > 0) {
                     if (!m_client.writeChannel(ch, buf, n)) {
-                        printf("FWD: ADB write failed\n");
+                        LOG_ERROR(tag, "ADB write failed");
                         goto done;
                     }
                 } else if (n == 0) {
-                    printf("FWD: Client disconnected\n");
+                    LOG_INFO(tag, "client disconnected");
                     goto done;
                 } else {
-                    break; // WSAEWOULDBLOCK
+                    break;
                 }
             }
         }
 
-        // 3. 等待新数据：Reader 线程 push 数据后会 notify_one()，
-        //    cv.wait_for 能立即被唤醒，延迟接近零
+        // 3. 等待新数据
         {
             std::unique_lock<std::mutex> lock(ch->mtx);
             if (ch->dataQueue.empty() && !ch->closed) {
@@ -195,5 +195,5 @@ done:
     m_client.closeChannel(ch);
     closesocket(clientSock);
     releaseSlot();
-    printf("FWD: Relay ended (%d active)\n", m_activeCount);
+    LOG_INFO(tag, "relay ended (%d active)", m_activeCount);
 }

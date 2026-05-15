@@ -1,6 +1,6 @@
 #include "adb_reader.h"
 #include "adb_transport.h"
-#include <cstdio>
+#include "log.h"
 #include <chrono>
 
 AdbReader::AdbReader() {}
@@ -32,8 +32,8 @@ void AdbReader::readLoop() {
             // Trigger disconnect on fatal USB errors or protocol errors (bad magic, etc.)
             // Normal timeouts during idle are NOT fatal.
             if ((m_transport->hadFatalError() || m_transport->hadProtocolError()) && m_onDisconnect) {
-                printf("ADB: Fatal error (USB=%d protocol=%d), disconnecting...\n",
-                       m_transport->hadFatalError(), m_transport->hadProtocolError());
+                LOG_ERROR("ADB", "fatal error USB=%d protocol=%d, disconnecting",
+                          m_transport->hadFatalError(), m_transport->hadProtocolError());
                 m_onDisconnect();
                 while (m_running) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));

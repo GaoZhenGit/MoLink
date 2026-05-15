@@ -5,6 +5,7 @@
 #include "../adb/adb_shell.h"
 #include "../usb/usb_device.h"
 
+#include "log.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -114,7 +115,6 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
         return buf;
     }
     if (cmd == "devices") {
-        // 枚举所有 ADB 设备，返回序列号及授权状态
         std::string result;
         auto devices = UsbDevice::discover();
         std::string connectedSerial = m_client.getSerial();
@@ -125,7 +125,6 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
             if (!serial.empty()) foundSerials.push_back(serial);
         }
 
-        // 确保 daemon 已连接的设备在列表中（其 USB 可能被占用导致 getSerial 失败）
         if (!connectedSerial.empty()) {
             bool inList = false;
             for (auto& s : foundSerials) {
@@ -206,17 +205,16 @@ void DaemonApp::transitionToDisconnected() {
     if (m_forwarder) m_forwarder->pause();
     m_lastSerial = m_client.getSerial();
     m_client.disconnect();
-    printf("Daemon: Device disconnected (serial=%s), waiting for reconnect...\n",
-           m_lastSerial.c_str());
+    LOG_INFO("DAEMON", "device disconnected, serial=%s", m_lastSerial.c_str());
 }
 
 bool DaemonApp::tryReconnectDevice() {
-    printf("Daemon: Attempting reconnect with serial=%s...\n",
-           m_lastSerial.empty() ? "(auto)" : m_lastSerial.c_str());
+    LOG_INFO("DAEMON", "attempting reconnect, serial=%s",
+             m_lastSerial.empty() ? "(auto)" : m_lastSerial.c_str());
     if (m_client.connect(m_lastSerial)) {
         if (m_forwarder) m_forwarder->resume();
         m_client.setState(DaemonState::CONNECTED);
-        printf("Daemon: Reconnected\n");
+        LOG_INFO("DAEMON", "reconnected");
         return true;
     }
     return false;
@@ -224,11 +222,10 @@ bool DaemonApp::tryReconnectDevice() {
 
 int DaemonApp::run() {
     if (!tryAcquireDaemonLock()) {
-        printf("Daemon is already running.\n");
+        LOG_ERROR("DAEMON", "already running");
         return 1;
     }
 
-    // 日志重定向
     char exeDir[MAX_PATH];
     GetModuleFileNameA(nullptr, exeDir, sizeof(exeDir));
     char* lastSlash = strrchr(exeDir, '\\');
@@ -240,16 +237,16 @@ int DaemonApp::run() {
     freopen(logPath.c_str(), "a", stderr);
     setvbuf(stdout, nullptr, _IONBF, 0);
 
-    printf("MoLink daemon starting (pid=%lu)...\n", GetCurrentProcessId());
+    LOG_INFO("DAEMON", "starting (pid=%lu)", GetCurrentProcessId());
 
     m_hDisconnectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     m_client.setDisconnectEvent(m_hDisconnectEvent);
 
     if (!m_client.connect(m_serial)) {
-        printf("FAIL: Cannot connect to device\n");
+        LOG_ERROR("DAEMON", "cannot connect to device");
         return 1;
     }
-    printf("Device: %s\n", m_client.getSerial().c_str());
+    LOG_INFO("DAEMON", "device: %s", m_client.getSerial().c_str());
 
     m_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
@@ -259,12 +256,12 @@ int DaemonApp::run() {
 
     HANDLE hPipeEvent = m_pipe.start();
     if (!hPipeEvent) {
-        printf("FAIL: Cannot create named pipe\n");
+        LOG_ERROR("DAEMON", "cannot create named pipe");
         return 1;
     }
 
     writePidFile();
-    printf("Daemon ready. Use 'molink stop' to stop.\n");
+    LOG_INFO("DAEMON", "ready");
 
     m_lastSerial = m_serial;
 
@@ -299,7 +296,7 @@ int DaemonApp::run() {
         }
     }
 
-    printf("Daemon stopping...\n");
+    LOG_INFO("DAEMON", "stopping");
     m_pipe.stop();
     return 0;
 }

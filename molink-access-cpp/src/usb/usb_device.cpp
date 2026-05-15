@@ -1,5 +1,6 @@
 #include "usb_device.h"
 #include <libusb.h>
+#include "log.h"
 #include <cstdio>
 
 std::vector<UsbDevice> UsbDevice::discover() {
@@ -8,19 +9,19 @@ std::vector<UsbDevice> UsbDevice::discover() {
     libusb_context* ctx = nullptr;
     int ret = libusb_init(&ctx);
     if (ret != 0) {
-        printf("USB: libusb_init failed: %s\n", libusb_error_name(ret));
+        LOG_ERROR("USB", "libusb_init failed: %s", libusb_error_name(ret));
         return result;
     }
 
     libusb_device** devs = nullptr;
     ssize_t count = libusb_get_device_list(ctx, &devs);
     if (count < 0) {
-        printf("USB: libusb_get_device_list failed: %s\n", libusb_error_name((int)count));
+        LOG_ERROR("USB", "libusb_get_device_list failed: %s", libusb_error_name((int)count));
         libusb_exit(ctx);
         return result;
     }
 
-    printf("USB: Scanning %zd USB devices...\n", count);
+    LOG_DEBUG("USB", "scanning %zd devices", count);
     for (ssize_t i = 0; i < count; i++) {
         libusb_device_descriptor desc;
         if (libusb_get_device_descriptor(devs[i], &desc) != 0) continue;
@@ -57,17 +58,15 @@ std::vector<UsbDevice> UsbDevice::discover() {
         libusb_free_config_descriptor(config);
 
         if (found && read_ep != 0 && write_ep != 0) {
-            printf("USB: Found ADB device [%zd]: VID=0x%04X PID=0x%04X "
-                   "iface=%d read_ep=0x%02X write_ep=0x%02X\n",
-                   i, desc.idVendor, desc.idProduct,
-                   adb_iface, read_ep, write_ep);
+            LOG_INFO("USB", "found ADB device [%zd]: VID=0x%04X PID=0x%04X iface=%d read=0x%02X write=0x%02X",
+                     i, desc.idVendor, desc.idProduct, adb_iface, read_ep, write_ep);
             UsbDevice dev(devs[i], ctx, adb_iface, read_ep, write_ep);
             result.push_back(dev);
         }
     }
 
     libusb_free_device_list(devs, 0);
-    printf("USB: Found %zu ADB device(s)\n", result.size());
+    LOG_INFO("USB", "found %zu ADB device(s)", result.size());
     return result;
 }
 
@@ -84,7 +83,7 @@ bool UsbDevice::open() {
 
     int ret = libusb_open(m_device, &m_handle);
     if (ret != 0) {
-        printf("USB: libusb_open failed: %s\n", libusb_error_name(ret));
+        LOG_ERROR("USB", "libusb_open failed: %s", libusb_error_name(ret));
         return false;
     }
 
@@ -93,20 +92,18 @@ bool UsbDevice::open() {
     if (config != 1) {
         ret = libusb_set_configuration(m_handle, 1);
         if (ret != 0) {
-            printf("USB: libusb_set_configuration(1) failed: %s\n", libusb_error_name(ret));
+            LOG_ERROR("USB", "set_config(1) failed: %s", libusb_error_name(ret));
         }
     }
 
-    // Windows: 尝试 detach kernel driver（WinUSB 替换驱动后通常没有）
     libusb_detach_kernel_driver(m_handle, m_interface_number);
 
     ret = libusb_claim_interface(m_handle, m_interface_number);
     if (ret != 0) {
-        printf("USB: libusb_claim_interface(%d) failed: %s\n",
-               m_interface_number, libusb_error_name(ret));
+        LOG_ERROR("USB", "claim_interface(%d) failed: %s",
+                  m_interface_number, libusb_error_name(ret));
         if (ret == LIBUSB_ERROR_NOT_SUPPORTED || ret == LIBUSB_ERROR_BUSY) {
-            printf("USB: Hint: Use Zadig to replace driver of ADB "
-                   "interface with WinUSB\n");
+            LOG_ERROR("USB", "use Zadig to replace driver with WinUSB");
         }
         libusb_close(m_handle);
         m_handle = nullptr;
@@ -114,8 +111,8 @@ bool UsbDevice::open() {
     }
 
     m_open = true;
-    printf("USB: Device opened, interface %d claimed (read=0x%02X write=0x%02X)\n",
-           m_interface_number, m_read_ep, m_write_ep);
+    LOG_INFO("USB", "device opened, interface %d claimed (read=0x%02X write=0x%02X)",
+             m_interface_number, m_read_ep, m_write_ep);
     return true;
 }
 
@@ -126,17 +123,17 @@ void UsbDevice::drainRead() {
     int drained = 0;
     while (bulkRead(buf, sizeof(buf), &got, 200))
         drained += got;
-    if (drained > 0) printf("USB: drained %d bytes stale data\n", drained);
+    if (drained > 0) LOG_DEBUG("USB", "drained %d bytes stale data", drained);
 }
 
 bool UsbDevice::clearHalt(uint8_t ep) {
     if (!m_handle) return false;
     int ret = libusb_clear_halt(m_handle, ep);
     if (ret != 0) {
-        printf("USB: clear_halt(0x%02X) failed: %s\n", ep, libusb_error_name(ret));
+        LOG_ERROR("USB", "clear_halt(0x%02X) failed: %s", ep, libusb_error_name(ret));
         return false;
     }
-    printf("USB: clear_halt(0x%02X) OK\n", ep);
+    LOG_INFO("USB", "clear_halt(0x%02X) ok", ep);
     return true;
 }
 
@@ -145,7 +142,6 @@ std::string UsbDevice::getSerial() const {
     bool tempOpen = false;
 
     if (!handle) {
-        // 临时打开读序列号（不需要 claim interface）
         if (libusb_open(m_device, &handle) != 0) return "";
         tempOpen = true;
     }
@@ -174,7 +170,7 @@ bool UsbDevice::bulkRead(void* buf, int len, int* transferred, int timeout_ms) {
     if (ret < 0) {
         m_lastErrorFatal = (ret != LIBUSB_ERROR_TIMEOUT);
         if (m_lastErrorFatal) {
-            printf("USB: bulkRead error: %s\n", libusb_error_name(ret));
+            LOG_ERROR("USB", "bulkRead error: %s", libusb_error_name(ret));
         }
         return false;
     }
@@ -187,7 +183,7 @@ bool UsbDevice::bulkWrite(const void* buf, int len, int* transferred, int timeou
                                    (unsigned char*)buf, len,
                                    transferred, timeout_ms);
     if (ret < 0) {
-        printf("USB: bulkWrite error: %s\n", libusb_error_name(ret));
+        LOG_ERROR("USB", "bulkWrite error: %s", libusb_error_name(ret));
         return false;
     }
     return true;

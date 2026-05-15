@@ -1,7 +1,7 @@
 #include "adb_transport.h"
 #include "adb_rsa.h"
 #include "../usb/usb_device.h"
-#include <cstdio>
+#include "log.h"
 #include <cstring>
 
 AdbTransport::AdbTransport(UsbDevice& device)
@@ -40,7 +40,6 @@ bool AdbTransport::writeExact(const void* buf, uint32_t len, uint32_t timeout_ms
 
 bool AdbTransport::send(uint32_t cmd, uint32_t arg0, uint32_t arg1,
                         const void* data, uint32_t data_len) {
-    // ADB data_check 是简单的字节求和，不是 CRC32
     uint32_t sum = 0;
     if (data && data_len > 0) {
         const uint8_t* p = (const uint8_t*)data;
@@ -49,12 +48,12 @@ bool AdbTransport::send(uint32_t cmd, uint32_t arg0, uint32_t arg1,
     AdbMessage msg(cmd, arg0, arg1, data_len, sum);
 
     if (!writeExact(&msg, sizeof(msg), 5000)) {
-        printf("FAIL: send header\n");
+        LOG_ERROR("ADB", "send header failed");
         return false;
     }
     if (data && data_len > 0) {
         if (!writeExact(data, data_len, 5000)) {
-            printf("FAIL: send data\n");
+            LOG_ERROR("ADB", "send data failed");
             return false;
         }
     }
@@ -65,31 +64,25 @@ bool AdbTransport::recv(AdbMessage& msg, std::vector<uint8_t>& data,
                          uint32_t timeout_ms) {
     data.clear();
 
-    // 读 header 用调用者的 timeout（24 bytes 很快）
     if (!readExact(&msg, sizeof(msg), timeout_ms))
         return false;
 
     if (msg.magic != (msg.command ^ 0xFFFFFFFF)) {
-        printf("FAIL: bad magic, got 0x%08X expect 0x%08X\n",
-               msg.magic, msg.command ^ 0xFFFFFFFF);
+        LOG_ERROR("ADB", "bad magic got 0x%08X expect 0x%08X",
+                  msg.magic, msg.command ^ 0xFFFFFFFF);
         m_protocolError = true;
         return false;
     }
 
     if (msg.data_length > MAX_PAYLOAD_V2) {
-        printf("FAIL: payload too large: %u\n", msg.data_length);
+        LOG_ERROR("ADB", "payload too large: %u", msg.data_length);
         m_protocolError = true;
         return false;
     }
 
     if (msg.data_length > 0) {
-        printf("ADB RECV: reading %u bytes data...\n", msg.data_length);
+        LOG_DEBUG("ADB", "recv %u bytes", msg.data_length);
         data.resize(msg.data_length);
-        // payload 用长超时：header 已校验通过，adbd 已将完整 payload 缓冲好，
-        // USB 传输本身是硬件速度（256KB 在 USB 2.0 上 ~8ms）。
-        // 若用短超时（如 100ms），readExact 中途超时返回 false 后会丢弃已消费
-        // 的部分数据，下一次 recv() 从 payload 中间开始读 → bad magic 雪崩。
-        // 30s 覆盖 USB 1.1 全速（~1.5MB/s）下 1MB payload 的极端情况。
         const uint32_t kPayloadTimeout = 30000;
         if (!readExact(data.data(), msg.data_length, kPayloadTimeout))
             return false;
@@ -100,32 +93,32 @@ bool AdbTransport::recv(AdbMessage& msg, std::vector<uint8_t>& data,
 bool AdbTransport::handshake(const std::string& banner) {
     uint32_t maxdata = MAX_PAYLOAD_V2;
     if (!send(A_CNXN, A_VERSION, maxdata, banner.c_str(), (uint32_t)banner.size())) {
-        printf("FAIL: send A_CNXN\n");
+        LOG_ERROR("ADB", "send A_CNXN failed");
         return false;
     }
 
     AdbMessage msg;
     std::vector<uint8_t> data;
     if (!recv(msg, data, 10000)) {
-        printf("FAIL: recv after A_CNXN\n");
+        LOG_ERROR("ADB", "recv after A_CNXN failed");
         return false;
     }
 
     if (msg.command == A_CNXN) {
-        printf("ADB: Connected! Max=%u Banner=%.*s\n",
-               msg.arg1, msg.data_length, (char*)data.data());
+        LOG_INFO("ADB", "connected, max=%u banner=%.*s",
+                 msg.arg1, msg.data_length, (char*)data.data());
         return true;
     }
 
     if (msg.command == A_AUTH) {
         uint32_t auth_type = msg.arg0;
-        printf("ADB: A_AUTH type=%u (token %u bytes)\n",
-               auth_type, (uint32_t)data.size());
+        LOG_DEBUG("ADB", "A_AUTH type=%u token=%u bytes",
+                  auth_type, (uint32_t)data.size());
         m_auth_token = data;
         return false;
     }
 
-    printf("FAIL: Unexpected response 0x%08X\n", msg.command);
+    LOG_ERROR("ADB", "unexpected response 0x%08X", msg.command);
     return false;
 }
 
@@ -140,19 +133,19 @@ uint32_t AdbTransport::openChannel(const std::string& destination, uint32_t loca
 
     if (!recv(msg, data, 5000)) return 0;
     if (msg.command != A_OKAY) {
-        printf("FAIL: Expected A_OKAY, got 0x%08X\n", msg.command);
+        LOG_ERROR("ADB", "expected A_OKAY got 0x%08X", msg.command);
         return 0;
     }
 
-    printf("ADB: Channel %u opened to %s, remote_id=%u\n",
-           local_id, destination.c_str(), msg.arg0);
+    LOG_INFO("ADB", "channel %u opened to %s remote=%u",
+             local_id, destination.c_str(), msg.arg0);
     return msg.arg0;
 }
 
 bool AdbTransport::handshake(AdbRsa& rsa, const std::string& banner) {
     uint32_t maxdata = MAX_PAYLOAD_V2;
     if (!send(A_CNXN, A_VERSION, maxdata, banner.c_str(), (uint32_t)banner.size())) {
-        printf("FAIL: send A_CNXN\n");
+        LOG_ERROR("ADB", "send A_CNXN failed");
         return false;
     }
 
@@ -162,54 +155,52 @@ bool AdbTransport::handshake(AdbRsa& rsa, const std::string& banner) {
         AdbMessage msg;
         std::vector<uint8_t> data;
         uint32_t timeout = waiting_for_authorization ? 120000 : 10000;
-        printf("ADB: Waiting for response (round %d, timeout=%u ms)...\n", round, timeout);
+        LOG_DEBUG("ADB", "handshake round %d timeout=%u ms", round, timeout);
         if (!recv(msg, data, timeout)) {
-            printf("FAIL: recv after A_CNXN (round %d)\n", round);
+            LOG_ERROR("ADB", "recv after A_CNXN (round %d)", round);
             return false;
         }
 
         if (msg.command == A_CNXN) {
-            printf("ADB: Connected! Max=%u Banner=%.*s\n",
-                   msg.arg1, (int)data.size(), (char*)data.data());
+            LOG_INFO("ADB", "connected, max=%u banner=%.*s",
+                     msg.arg1, (int)data.size(), (char*)data.data());
             return true;
         }
 
         if (msg.command == A_AUTH && msg.arg0 == AUTH_TOKEN) {
             if (waiting_for_authorization) {
-                // 第二轮 TOKEN: 发送公钥
-                printf("ADB: Device requested public key\n");
+                LOG_DEBUG("ADB", "device requested public key");
                 std::string payload = rsa.getPubKeyPayload();
                 if (payload.empty()) {
-                    printf("FAIL: Cannot get public key payload\n");
+                    LOG_ERROR("ADB", "cannot get public key payload");
                     return false;
                 }
                 if (!send(A_AUTH, AUTH_RSAPUBLICKEY, 0, payload.data(), (uint32_t)payload.size())) {
-                    printf("FAIL: send AUTH_RSAPUBLICKEY\n");
+                    LOG_ERROR("ADB", "send AUTH_RSAPUBLICKEY failed");
                     return false;
                 }
-                printf("ADB: Public key sent (%zu bytes, round %d)\n", payload.size(), round);
+                LOG_DEBUG("ADB", "public key sent (%zu bytes round %d)", payload.size(), round);
             } else {
-                // 第一轮 TOKEN: 签名
-                printf("ADB: Signing token (%u bytes)...\n", (uint32_t)data.size());
+                LOG_DEBUG("ADB", "signing token (%u bytes)", (uint32_t)data.size());
                 auto sig = rsa.signToken(data.data(), data.size());
                 if (sig.empty()) {
-                    printf("FAIL: RSA signing failed\n");
+                    LOG_ERROR("ADB", "RSA signing failed");
                     return false;
                 }
                 if (!send(A_AUTH, AUTH_SIGNATURE, 0, sig.data(), (uint32_t)sig.size())) {
-                    printf("FAIL: send AUTH_SIGNATURE\n");
+                    LOG_ERROR("ADB", "send AUTH_SIGNATURE failed");
                     return false;
                 }
-                printf("ADB: Signature sent (%u bytes)\n", (uint32_t)sig.size());
+                LOG_DEBUG("ADB", "signature sent (%u bytes)", (uint32_t)sig.size());
                 waiting_for_authorization = true;
             }
         } else {
-            printf("FAIL: Unexpected response 0x%08X (arg0=%u)\n", msg.command, msg.arg0);
+            LOG_ERROR("ADB", "unexpected response 0x%08X arg0=%u", msg.command, msg.arg0);
             return false;
         }
     }
 
-    printf("FAIL: Handshake loop exhausted\n");
+    LOG_ERROR("ADB", "handshake loop exhausted");
     return false;
 }
 
@@ -225,22 +216,21 @@ bool AdbTransport::readChannel(uint32_t local_id, uint32_t remote_id,
         if (!recv(msg, data, timeout_ms)) return false;
 
         if (msg.command == A_CLSE) {
-            printf("ADB: Channel %u/%u closed by remote\n", local_id, remote_id);
+            LOG_WARN("ADB", "channel %u/%u closed by device", local_id, remote_id);
             data.clear();
             return false;
         }
         if (msg.command == A_OKAY) {
-            // 对方确认收到我们的数据，跳过继续等数据帧
             continue;
         }
         if (msg.command != A_WRTE) {
-            printf("ADB: Unexpected cmd 0x%08X on channel %u/%u\n",
-                   msg.command, local_id, remote_id);
+            LOG_ERROR("ADB", "unexpected cmd 0x%08X on channel %u/%u",
+                      msg.command, local_id, remote_id);
             return false;
         }
-        // 确认收到设备发来的数据，回 A_OKAY
         send(A_OKAY, local_id, remote_id, nullptr, 0);
-        printf("ADB: Channel %u/%u read %u bytes\n", local_id, remote_id, (uint32_t)data.size());
+        LOG_DEBUG("ADB", "channel %u/%u read %u bytes",
+                  local_id, remote_id, (uint32_t)data.size());
         return true;
     }
 }

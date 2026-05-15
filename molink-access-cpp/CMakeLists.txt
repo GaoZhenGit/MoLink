@@ -8,6 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
 
+# 开发阶段：启用全量 DEBUG 日志。生产环境注释此行即可。
+add_definitions(-DMOLINK_DEBUG_LOG)
+
 include_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/include)
 include_directories(${CMAKE_SOURCE_DIR}/src/utils)
 include_directories(${CMAKE_BINARY_DIR})  # for generated version.h

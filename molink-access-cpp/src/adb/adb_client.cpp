@@ -1,4 +1,5 @@
 #include "adb_client.h"
+#include "log.h"
 #include <cstdio>
 
 // ---- Device Discovery ----
@@ -32,9 +33,9 @@ bool AdbClient::loadOrGenerateKey() {
     std::string keyPath = getDefaultKeyPath();
     if (m_rsa->loadKey(keyPath)) return true;
 
-    printf("ADB: Generating new RSA key...\n");
+    LOG_INFO("ADB", "generating new RSA key");
     if (!m_rsa->generateKey()) {
-        printf("FAIL: RSA key generation failed\n");
+        LOG_ERROR("ADB", "RSA key generation failed");
         return false;
     }
 
@@ -47,7 +48,7 @@ bool AdbClient::connect(const std::string& serial) {
 
     m_devices = UsbDevice::discover();
     if (m_devices.empty()) {
-        printf("ADB: No device found\n");
+        LOG_ERROR("ADB", "no device found");
         return false;
     }
 
@@ -67,7 +68,7 @@ bool AdbClient::connect(const std::string& serial) {
     selected->drainRead();
 
     m_serial = selected->getSerial();
-    printf("ADB: Device %s opened\n", m_serial.empty() ? "(no serial)" : m_serial.c_str());
+    LOG_INFO("ADB", "device %s opened", m_serial.empty() ? "(no serial)" : m_serial.c_str());
 
     if (!loadOrGenerateKey()) {
         selected->close();
@@ -83,7 +84,7 @@ bool AdbClient::connect(const std::string& serial) {
         "openscreen_mdns";
 
     for (int attempt = 0; attempt < 3; attempt++) {
-        printf("ADB: Handshake attempt %d...\n", attempt + 1);
+        LOG_INFO("ADB", "handshake attempt %d", attempt + 1);
         if (m_transport->handshake(*m_rsa, banner)) {
             m_selectedDev = selected;
             m_connected = true;
@@ -91,29 +92,28 @@ bool AdbClient::connect(const std::string& serial) {
             m_reader.start(m_transport.get(), &m_channels, &m_pending,
                           &m_channelMutex, &m_writeMutex);
 
-            // Wire disconnect notification
             if (m_hDisconnectEvent) {
                 m_reader.setDisconnectCallback([this]() {
                     SetEvent(m_hDisconnectEvent);
                 });
             }
 
-            printf("ADB: Connected\n");
+            LOG_INFO("ADB", "connected");
             return true;
         }
 
         if (attempt < 2) {
-            printf("ADB: Retrying in 2s...\n");
+            LOG_INFO("ADB", "retrying in 2s");
             selected->close();
             Sleep(2000);
             if (!selected->open()) {
-                printf("FAIL: Cannot re-open device\n");
+                LOG_ERROR("ADB", "cannot re-open device");
                 return false;
             }
         }
     }
 
-    printf("FAIL: Handshake failed after 3 attempts\n");
+    LOG_ERROR("ADB", "handshake failed after 3 attempts");
     selected->close();
     return false;
 }
@@ -121,7 +121,6 @@ bool AdbClient::connect(const std::string& serial) {
 void AdbClient::disconnect() {
     m_reader.stop();
 
-    // 唤醒所有 pending open
     {
         std::lock_guard<std::mutex> lock(m_channelMutex);
         for (auto& pair : m_pending) {
@@ -134,7 +133,6 @@ void AdbClient::disconnect() {
         }
     }
 
-    // 清空所有通道
     {
         std::lock_guard<std::mutex> lock(m_channelMutex);
         for (auto& pair : m_channels) {
@@ -171,13 +169,11 @@ ChannelPtr AdbClient::openChannel(const std::string& destination) {
     uint32_t localId = m_nextLocalId++;
     auto po = std::make_shared<PendingOpen>();
 
-    // 先注册 pending，再发送 A_OPEN（避免响应比注册先到）
     {
         std::lock_guard<std::mutex> lock(m_channelMutex);
         m_pending[localId] = po;
     }
 
-    // 发送 A_OPEN 不自己读 recv（AdbReader 负责分发响应）
     {
         std::lock_guard<std::mutex> wLock(m_writeMutex);
         m_transport->send(A_OPEN, localId, 0,
@@ -185,7 +181,6 @@ ChannelPtr AdbClient::openChannel(const std::string& destination) {
                          (uint32_t)destination.size() + 1);
     }
 
-    // 等待 AdbReader 收到响应
     uint32_t remoteId = 0;
     bool error = false;
     {
@@ -195,14 +190,13 @@ ChannelPtr AdbClient::openChannel(const std::string& destination) {
         error = po->error;
     }
 
-    // 移除 pending
     {
         std::lock_guard<std::mutex> lock(m_channelMutex);
         m_pending.erase(localId);
     }
 
     if (error || remoteId == 0) {
-        printf("ADB: Failed to open channel to %s\n", destination.c_str());
+        LOG_ERROR("ADB", "failed to open channel to %s", destination.c_str());
         return nullptr;
     }
 
@@ -215,33 +209,30 @@ ChannelPtr AdbClient::openChannel(const std::string& destination) {
         m_channels[localId] = ch;
     }
 
-    printf("ADB: Channel %u opened to %s (remote=%u)\n",
-           localId, destination.c_str(), remoteId);
+    LOG_INFO("ADB", "channel %u opened to %s remote=%u",
+             localId, destination.c_str(), remoteId);
     return ch;
 }
 
 void AdbClient::closeChannel(ChannelPtr ch) {
     if (!ch || !m_transport) return;
 
-    // 标记 draining，阻止 AdbReader 继续往队列推数据
     {
         std::lock_guard<std::mutex> chLock(ch->mtx);
         ch->draining = true;
     }
 
-    // 从 map 移除（AdbReader 之后读到的消息会丢弃）
     {
         std::lock_guard<std::mutex> lock(m_channelMutex);
         m_channels.erase(ch->localId);
     }
 
-    // 发送 A_CLSE
     {
         std::lock_guard<std::mutex> wLock(m_writeMutex);
         m_transport->closeChannel(ch->localId, ch->remoteId);
     }
 
-    printf("ADB: Channel %u/%u closed\n", ch->localId, ch->remoteId);
+    LOG_INFO("ADB", "channel %u/%u closed", ch->localId, ch->remoteId);
 }
 
 bool AdbClient::writeChannel(ChannelPtr ch, const void* data, uint32_t len) {

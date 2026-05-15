@@ -1,4 +1,5 @@
 #include "adb_rsa.h"
+#include "log.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
