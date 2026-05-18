@@ -4,7 +4,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
-#include <memory>
 
 #include "daemon/daemon_app.h"
 #include "cli/cli_utils.h"

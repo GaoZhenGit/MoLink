@@ -43,7 +43,8 @@ public final class SessionContext {
         return destroyed.get();
     }
 
-    public void markDestroyed() {
-        destroyed.set(true);
+    /** @return true if this caller won the race and should proceed with cleanup */
+    public boolean markDestroyed() {
+        return destroyed.compareAndSet(false, true);
     }
 }

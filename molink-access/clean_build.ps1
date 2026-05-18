@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 可选版本号：.\clean_build.ps1 v2026.05.18.1600
+$verOverride = $args[0]
+$cmakeVersionArg = if ($verOverride -and $verOverride -match '^v\d{4}') { "-DMOLINK_VERSION=$verOverride" } else { "" }
 
 # 1. 停止 daemon（忽略错误，可能未运行）
 Push-Location "$root\build"
@@ -29,7 +32,7 @@ Write-Host "G++   : $(Get-Command g++ | Select-Object -ExpandProperty Source)"
 # 5. 配置 CMake
 New-Item -ItemType Directory -Force "$root\build" | Out-Null
 Push-Location "$root\build"
-cmake .. -G "MinGW Makefiles"
+cmake .. -G "MinGW Makefiles" $cmakeVersionArg
 
 # 6. 编译
 try { $nproc = (Get-WmiObject Win32_ComputerSystem).NumberOfLogicalProcessors } catch {}

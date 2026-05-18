@@ -16,10 +16,15 @@ include_directories(${CMAKE_SOURCE_DIR}/src/utils)
 include_directories(${CMAKE_BINARY_DIR})  # for generated version.h
 link_directories(${CMAKE_SOURCE_DIR}/third_party/libusb/lib)
 
-# 每次构建生成 version_gen.h（使用构建时的时间戳）
+# 版本号：可从外部传入 -DMOLINK_VERSION=v2026.05.18.1600 覆盖自动时间戳
+set(MOLINK_VERSION "" CACHE STRING "Version override (empty = auto from build time)")
+
+# 每次构建生成 version_gen.h
 set(VERSION_GEN_H "${CMAKE_BINARY_DIR}/version_gen.h")
 add_custom_target(gen_version ALL
-    ${CMAKE_COMMAND} -DOUTPUT_FILE=${VERSION_GEN_H} -P ${CMAKE_SOURCE_DIR}/version.cmake
+    ${CMAKE_COMMAND} -DOUTPUT_FILE=${VERSION_GEN_H}
+                     -DVERSION_OVERRIDE=${MOLINK_VERSION}
+                     -P ${CMAKE_SOURCE_DIR}/version.cmake
     COMMENT "Generating version header..."
 )
 

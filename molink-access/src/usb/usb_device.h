@@ -2,6 +2,7 @@
 #define USB_DEVICE_H
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,11 +14,12 @@ class UsbDevice {
 public:
     static std::vector<UsbDevice> discover();
 
-    UsbDevice(libusb_device* dev, libusb_context* ctx,
+    UsbDevice(libusb_device* dev, std::shared_ptr<libusb_context> ctx,
               int iface, uint8_t read_ep, uint8_t write_ep);
     ~UsbDevice();
 
     bool open();
+    bool prepare();  // open + clearHalt(read, write) + drainRead
     bool clearHalt(uint8_t ep);
     void drainRead();
     std::string getSerial() const;
@@ -32,7 +34,7 @@ public:
 private:
     libusb_device*       m_device;
     libusb_device_handle* m_handle;
-    libusb_context*      m_ctx;
+    std::shared_ptr<libusb_context> m_ctx;
     uint8_t              m_read_ep;
     uint8_t              m_write_ep;
     int                  m_interface_number;

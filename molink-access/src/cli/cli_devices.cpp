@@ -1,5 +1,5 @@
 #include "cli_utils.h"
-#include "../adb/adb_client.h"
+#include "../adb/adb_transport.h"
 #include "../adb/adb_rsa.h"
 #include "../usb/usb_device.h"
 
@@ -61,23 +61,11 @@ static void queryViaUsb(std::vector<DevResult>& results) {
     auto devices = UsbDevice::discover();
 
     AdbRsa rsa;
-    std::string kp = getDefaultKeyPath();
-    bool keyReady = false;
-    if (rsa.loadKey(kp)) {
-        keyReady = true;
-    } else {
-        if (rsa.generateKey()) {
-            rsa.saveKey(kp);
-            keyReady = true;
-        }
-    }
+    bool keyReady = loadOrGenerateKey(rsa);
 
     for (auto& dev : devices) {
         DevResult r;
-        if (!dev.open()) { results.push_back(r); continue; }
-        dev.clearHalt(dev.getReadEndpoint());
-        dev.clearHalt(dev.getWriteEndpoint());
-        dev.drainRead();
+        if (!dev.prepare()) { results.push_back(r); continue; }
         r.serial = dev.getSerial();
 
         r.auth = "no";

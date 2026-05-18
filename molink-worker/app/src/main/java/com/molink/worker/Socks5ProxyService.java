@@ -56,7 +56,7 @@ public class Socks5ProxyService extends Service {
     private NioEventLoopGroup eventLoopGroup;
     private volatile boolean isRunning = false;
     private volatile long startTime = 0;
-    private ProxyProtocol proxyType = ProxyProtocol.MIX;
+    private volatile ProxyProtocol proxyType = ProxyProtocol.MIX;
     private StatusHttpServer httpServer;
 
     // ========== UI 统计相关（static 供静态方法直接访问）==========
@@ -252,6 +252,11 @@ public class Socks5ProxyService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "Failed to bind server socket", e);
             isRunning = false;
+            if (eventLoopGroup != null) {
+                eventLoopGroup.shutdownGracefully();
+                eventLoopGroup = null;
+            }
+            return;
         }
 
         Log.i(TAG, proxyType.getDisplayName() + " proxy server started on port " + SOCKS5_PORT);

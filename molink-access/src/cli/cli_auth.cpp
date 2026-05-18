@@ -1,5 +1,5 @@
 #include "cli_utils.h"
-#include "../adb/adb_client.h"
+#include "../adb/adb_transport.h"
 #include "../adb/adb_rsa.h"
 #include "../usb/usb_device.h"
 
@@ -90,23 +90,12 @@ int cmdAuth(int argc, char* argv[]) {
     }
 
     // 加载密钥（抑制内部 debug 输出）
-    std::string kp = getDefaultKeyPath();
-
     fflush(stdout);
     int saved = _dup(1);
     freopen("NUL", "w", stdout);
 
     AdbRsa rsa;
-    bool keyReady = false;
-    if (rsa.loadKey(kp)) {
-        keyReady = true;
-    } else {
-        // 没有 key，生成新的
-        if (rsa.generateKey()) {
-            rsa.saveKey(kp);
-            keyReady = true;
-        }
-    }
+    bool keyReady = loadOrGenerateKey(rsa);
 
     fflush(stdout);
     _dup2(saved, 1);
@@ -151,12 +140,7 @@ int cmdAuth(int argc, char* argv[]) {
         saved = _dup(1);
         freopen("NUL", "w", stdout);
 
-        bool opened = dev.open();
-        if (opened) {
-            dev.clearHalt(dev.getReadEndpoint());
-            dev.clearHalt(dev.getWriteEndpoint());
-            dev.drainRead();
-        }
+        bool opened = dev.prepare();
 
         std::string result;
         if (opened) {

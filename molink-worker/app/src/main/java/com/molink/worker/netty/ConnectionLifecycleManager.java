@@ -48,10 +48,9 @@ public final class ConnectionLifecycleManager {
      * 注意：必须同时关闭两个 channel，否则对端 read() 不会退出。
      */
     public void destroy(SessionContext sessionCtx) {
-        if (sessionCtx == null || sessionCtx.isDestroyed()) {
+        if (sessionCtx == null || !sessionCtx.markDestroyed()) {
             return;
         }
-        sessionCtx.markDestroyed();
 
         // 计算并记录连接用时（精确到秒）
         ConnectionRecord r = sessionCtx.record;
@@ -81,6 +80,9 @@ public final class ConnectionLifecycleManager {
         // 移除注册
         if (client != null) {
             contexts.remove(client.id());
+        }
+        if (target != null) {
+            contexts.remove(target.id());
         }
     }
 

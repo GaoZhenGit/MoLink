@@ -38,14 +38,15 @@ USB Read Thread (AdbReader, 唯一)
   │ recv() 100ms 循环
   ├── A_WRTE → push Channel[local_id].dataQueue → cv.notify
   ├── A_OKAY → PendingOpen 分发 / 丢弃（write ack）
-  └── A_CLSE → Channel.closed = true / PendingOpen error
+  ├── A_CLSE → Channel.closed = true / PendingOpen error
+  └── bad magic / USB fatal → disconnect callback → 主循环重连
 
 Relay Thread × N (每 TCP 连接一个, max 16)
-  while:
-    select(clientSock, 100ms) → recv → AdbClient::writeChannel (write mutex)
-    lock(ch.mtx)
-      dataQueue 有数据? → send to client
-      closed? → break
+  loop:
+    1. 排空 dataQueue → send to client（所有待发数据一次性发完）
+    2. 非阻塞轮询 clientSocket → recv → writeChannel
+    3. cv.wait_for(100ms)（Reader notify 时立即唤醒）
+```
       否则 → cv.wait_for(50ms)
 
 Main Thread
@@ -300,11 +301,22 @@ AUTH_RSAPUBLICKEY 公钥来源:
 
 ```
 molink                              显示帮助
-molink run     [options]             前台运行
-molink start   [options]             后台守护进程
+molink run     [options]            前台运行
+molink start   [options]            后台守护进程
 molink stop                         停止守护进程
-molink devices                      列出 ADB 设备 + 授权状态
 molink status                       查询守护进程状态
+molink devices                      列出 ADB 设备 + 授权状态
+molink auth    [-s serial]          触发设备授权弹窗
+molink forward [options]            启动端口转发（需 daemon 运行）
+molink push    <local> <remote>     上传文件/目录
+molink pull    <remote> <local>     下载文件/目录
+molink apush   <path> [--rdir R]    自动上传（zip + .gitignore）
+molink apull   [--rdir R]           交互式自动下载 + 解压
+molink adel    [--rdir R]           交互式删除远程文件
+molink ls      [remote_path]        列出设备目录
+molink del     <remote_path>        删除设备文件
+molink shell   <command>            执行 shell 命令
+molink -v / --version               显示版本号
 ```
 
 ### 参数
@@ -314,47 +326,58 @@ molink status                       查询守护进程状态
 | `--port` | `-p` | 1080 | 本地 TCP 监听端口 |
 | `--rport` | `-r` | 1081 | 设备目标端口 |
 | `--serial` | `-s` | 第一个设备 | 指定设备序列号 |
+| `--rdir` | — | /sdcard/tmp | 远程目录 (apush/apull/adel) |
 | `--help` | `-h` | — | 帮助 |
 
 ### 示例
 
 ```powershell
-# 前台调试
-.\molink.exe run -p 1080
-
-# 后台守护
-.\molink.exe start -p 1080 -r 1081
-curl --socks5 127.0.0.1:1080 --proxy-user socks5:password123 https://www.baidu.com
+# 后台守护 + 转发（分离模式）
+.\molink.exe start
+.\molink.exe forward -p 1080 -r 1081
 .\molink.exe status
 .\molink.exe stop
 
-# 重启（start 自动检测已有进程 → 先停旧再启新）
-.\molink.exe start -p 2080
+# 设备授权
+.\molink.exe auth
+# 设备弹出授权对话框 → 点"允许"
 
-# 指定设备
-.\molink.exe run -s 852QLDV923XMM -p 1080
+# 文件传输
+.\molink.exe push .\test.txt /sdcard/test.txt
+.\molink.exe pull /sdcard/test.txt .\downloaded.txt
 
-# 设备列表
-.\molink.exe devices
+# 目录操作
+.\molink.exe push .\myfolder /sdcard/myfolder
+.\molink.exe pull /sdcard/myfolder .\downloaded_folder
+
+# 自动打包上传（支持 .gitignore）
+.\molink.exe apush .\project --rdir /sdcard/tmp
+.\molink.exe apull
+.\molink.exe adel
+
+# shell 命令
+.\molink.exe ls /sdcard/
+.\molink.exe shell "getprop ro.product.model"
 ```
 
 ### devices 输出示例
 
 ```
-Keys: C:\Users\xxx\.android
-  molink_key.bin : missing
-  adbkey         : found
-  adbkey.pub     : found
+Key: D:\project\...\build\molink_key.bin (found)
 
 #    SERIAL                 AUTH
 ---  ---------------------- ----
-0    852QLDV923XMM          yes
+0    RFCWA0K5W8W            yes
 ```
 
 ### status 输出示例
 
 ```
-connected  serial=852QLDV923XMM  port=1080  connections=3
+# daemon 运行中
+daemon=running state=connected serial=RFCWA0K5W8W forwarding=1080->1081 connections=2
+
+# daemon 未运行
+daemon=stopped
 ```
 
 ---
@@ -423,7 +446,7 @@ main() → cmdStop()
 ### 编译步骤
 
 ```powershell
-cd molink-access-cpp
+cd molink-access
 mkdir build && cd build
 cmake .. -G "MinGW Makefiles"
 mingw32-make
@@ -476,8 +499,10 @@ cp libusb/libusb.h ../third_party/libusb/include/
 ## 文件结构
 
 ```
-molink-access-cpp/
-├── CMakeLists.txt                    # MinGW Makefiles, C++17
+molink-access/
+├── CMakeLists.txt                    # MinGW Makefiles, C++17, 日志开关
+├── clean_build.ps1                   # 一键构建脚本
+├── version.cmake                     # 版本号生成脚本
 ├── README.md
 ├── third_party/
 │   └── libusb/
@@ -487,44 +512,70 @@ molink-access-cpp/
 │           └── libusb-1.0.a         # libusb 静态库
 └── src/
     ├── main.cpp                     # CLI 入口 + 命令分发
+    ├── version.h/cpp                # 版本号输出
     ├── usb/
     │   └── usb_device.h/cpp         # libusb 封装
     │       - discover()             # 扫描 USB，匹配 ADB 接口 (class=0xFF,sub=0x42,proto=0x01)
     │       - open() / close()       # 打开/关闭设备 + claim interface
-    │       - getSerial()            # 读取 USB 字符串描述符
+    │       - getSerial()            # 读取 USB 字符串描述符（支持临时打开）
     │       - bulkRead() / bulkWrite() # libusb_bulk_transfer 封装
     │       - clearHalt() / drainRead() # 清端点 + 排空残留
     ├── adb/
     │   ├── adb_transport.h/cpp      # ADB 协议层
     │   │   - AdbMessage (24B)       # 消息结构 + pack(1)
-    │   │   - send() / recv()        # 消息收发 + magic 校验
-    │   │   - handshake()            # RSA 握手（CNXN → TOKEN → SIGNATURE → CNXN）
+    │   │   - send() / recv()        # 消息收发 + magic 校验（payload 30s 超时）
+    │   │   - handshake()            # RSA 握手（3 轮循环）
     │   │   - openChannel()          # A_OPEN → A_OKAY
     │   │   - closeChannel()         # A_CLSE
-    │   │   - readChannel() / writeChannel() # A_WRTE + A_OKAY 双向
+    │   │   - readChannel() / writeChannel()
     │   ├── adb_rsa.h/cpp            # RSA 密钥 + 签名
     │   │   - generateKey()          # BCryptGenerateKeyPair 2048-bit
-    │   │   - loadKey() / saveKey()  # BCrypt blob 文件存取
-    │   │   - loadPkcs8()            # 解析 PKCS#8 PEM → BCRYPT_RSAFULLPRIVATE_BLOB
+    │   │   - loadKey() / saveKey()  # BCrypt blob 文件存取（含缓存填充）
     │   │   - signToken()            # PKCS#1 v1.5 填充 + BCryptDecrypt(PAD_NONE)
     │   │   - buildRsaPublicKey()    # 计算 n0inv + rr，构建 524B RSAPublicKey
-    │   │   - getPubKeyPayload()     # base64 + user@host + '\0' (720B)
-    │   │   - sha1() / sha256()      # 自实现（备用）
+    │   │   - getPubKeyPayload()     # base64 + user@host + '\0'
+    │   │   - getDefaultKeyPath()    # 返回 exe 同级 molink_key.bin 路径
+    │   │   - hadProtocolError()     # 协议错误检测（bad magic 等）
     │   ├── adb_reader.h/cpp         # USB 读线程 + 消息分发
     │   │   - readLoop()             # recv() 100ms → Channel/PendingOpen 分发
     │   │   - Channel                # dataQueue + cv + closed/draining flag
-    │   │   - PendingOpen             # openChannel 等待 AdbReader 分发 A_OKAY
-    │   └── adb_client.h/cpp         # 高层客户端
-    │       - discover()             # 设备发现 → DeviceInfo 列表
-    │       - connect() / disconnect() # 设备 open + drain + RSA 握手
-    │       - openChannel()          # PendingOpen 机制
-    │       - closeChannel()         # draining flag + A_CLSE
-    │       - writeChannel()         # 线程安全（write mutex）
+    │   │   - PendingOpen            # openChannel 等待 AdbReader 分发 A_OKAY
+    │   │   - 协议/硬件错误触发 disconnect callback
+    │   ├── adb_client.h/cpp         # 高层客户端
+    │   │   - loadOrGenerateKey()    # 加载或自动生成 molink_key.bin
+    │   │   - connect() / disconnect() # 设备 open + drain + RSA 握手（3 次重试，含重试后 drain）
+    │   │   - openChannel()          # PendingOpen 机制
+    │   │   - closeChannel()         # draining flag + A_CLSE
+    │   │   - writeChannel()         # 线程安全（write mutex）
+    │   ├── adb_sync.h/cpp           # SYNC 协议（文件传输）
+    │   └── adb_shell.h/cpp          # Shell 命令执行
     ├── cli/
-    │   └── named_pipe.h/cpp          # Named Pipe Server
-    │       - start()                # CreateNamedPipe + ConnectNamedPipe (OVERLAPPED)
-    │       - processConnection()    # ReadFile → 命令处理 → WriteFile
-    │       - stop()                 # Disconnect + CloseHandle
+    │   ├── cli_utils.h/cpp          # 公共定义（RemoteFile 解析、sendPipeCmd 声明）
+    │   ├── cli_auth.cpp             # 设备授权（USB 扫描 + RSA 握手）
+    │   ├── cli_devices.cpp          # 设备列表（daemon pipe 优先 + USB 回退）
+    │   ├── cli_forward.cpp          # 端口转发 CLI
+    │   ├── cli_apush.cpp            # 自动打包上传（zip + gitignore）
+    │   ├── cli_apull.cpp            # 交互式下载 + 解压
+    │   ├── cli_adel.cpp             # 交互式删除
+    │   ├── cli_del.cpp              # 单文件删除
+    │   └── named_pipe.h/cpp         # Named Pipe Server
+    ├── daemon/
+    │   └── daemon_app.h/cpp         # 守护进程主类
+    │       - run()                  # 事件循环（stop / pipe / disconnect）
+    │       - onPipeCommand()        # 管道命令处理（push/pull/forward/ls/del/shell）
+    │       - transitionToDisconnected() / tryReconnectDevice()
+    ├── forward/
+    │   └── forwarder.h/cpp          # TCP 端口转发器
+    │       - acceptLoop()           # 接受 TCP 连接（detached relay 线程）
+    │       - relay()                # 双向数据转发（优先排空队列，非阻塞轮询）
+    │       - pause() / resume()     # 设备断连时暂停/恢复
+    ├── transfer/
+    │   ├── file_push.cpp            # 文件上传
+    │   ├── file_pull.cpp            # 文件下载
+    │   └── file_list.cpp            # 目录列表
+    └── utils/
+        └── log.h                    # 日志宏（LOG_INFO/DEBUG/WARN/ERROR）
+``
     └── forward/
         └── forwarder.h/cpp          # TCP 端口转发器
             - start() / stop()       # listen + acceptLoop 线程
