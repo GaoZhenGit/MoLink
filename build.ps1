@@ -20,7 +20,7 @@ Write-Host "  Access: $( & "$root\molink-access\build\molink.exe" -v )" -Foregro
 Write-Host "[2/3] Building worker..." -ForegroundColor Yellow
 Push-Location "$root\molink-worker"
 $gradleCmd = if (Test-Path .\gradlew.bat) { ".\gradlew.bat" } else { "gradle" }
-$buildResult = & $gradleCmd clean assembleRelease "-PversionName=$ver" "-PversionCode=$verCode" 2>&1
+$buildResult = & $gradleCmd clean assembleDebug "-PversionName=$ver" "-PversionCode=$verCode" 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Worker build failed!" -ForegroundColor Red
     Write-Host $buildResult
@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "  Worker: $ver" -ForegroundColor Green
 }
 
-$apkDir = "$root\molink-worker\app\build\outputs\apk\release"
+$apkDir = "$root\molink-worker\app\build\outputs\apk\debug"
 $apkFile = Get-ChildItem -Path $apkDir -Filter "*.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
 Pop-Location
 
