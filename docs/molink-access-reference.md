@@ -446,7 +446,7 @@ main() → cmdStop()
 ### 编译步骤
 
 ```powershell
-cd molink-access-cpp
+cd molink-access
 mkdir build && cd build
 cmake .. -G "MinGW Makefiles"
 mingw32-make
@@ -499,7 +499,7 @@ cp libusb/libusb.h ../third_party/libusb/include/
 ## 文件结构
 
 ```
-molink-access-cpp/
+molink-access/
 ├── CMakeLists.txt                    # MinGW Makefiles, C++17, 日志开关
 ├── clean_build.ps1                   # 一键构建脚本
 ├── version.cmake                     # 版本号生成脚本

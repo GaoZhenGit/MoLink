@@ -11,17 +11,17 @@
 ```
 D:/project/MoLink/
 ├── molink-worker/         # Android App
-└── molink-access-cpp/     # Windows CLI (C++, 自实现 ADB 协议栈)
+└── molink-access/     # Windows CLI (C++, 自实现 ADB 协议栈)
 ```
 
 ## 通用说明
 
 - **自实现 ADB 协议栈**：libusb + BCrypt RSA，零第三方 DLL 依赖，静态编译
 - **开发环境**：Windows 10，MinGW-w64 64-bit，CMake 3.14+
-- **构建脚本**：`molink-access-cpp/clean_build.ps1`（停服→清理→编译→恢复 key）
+- **构建脚本**：`molink-access/clean_build.ps1`（停服→清理→编译→恢复 key）
 - **配置优先级**：环境变量 > 配置文件 > 默认值
 
-## 一、molink-access-cpp（Windows 端）
+## 一、molink-access（Windows 端）
 
 ### 技术栈
 - **语言**：C++17
@@ -102,7 +102,7 @@ molink -h / --help                显示帮助
 
 ### 数据流
 ```
-[molink-access-cpp] → [USB/ADB] → [Socks5ProxyService] → [互联网]
+[molink-access] → [USB/ADB] → [Socks5ProxyService] → [互联网]
 ```
 
 ## 测试

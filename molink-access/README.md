@@ -112,7 +112,7 @@ curl --socks5 127.0.0.1:1080 https://www.baidu.com
 .\clean_build.ps1
 
 # 或手动：
-cd molink-access-cpp
+cd molink-access
 mkdir build && cd build
 cmake .. -G "MinGW Makefiles"
 cmake --build . --config Release -- -j4 --output-sync=line
@@ -196,7 +196,7 @@ CMakeLists.txt 中注释 `add_definitions(-DMOLINK_DEBUG_LOG)` 即可关闭 DEBU
 ## 文件结构
 
 ```
-molink-access-cpp/
+molink-access/
 ├── CMakeLists.txt                 # 构建配置（含版本号自动生成）
 ├── clean_build.ps1                # 一键构建脚本
 ├── version.cmake                  # 版本号生成 CMake 脚本
