@@ -40,4 +40,6 @@ private:
     std::vector<uint8_t> buildRsaPublicKey();
 };
 
+bool loadOrGenerateKey(AdbRsa& rsa);
+
 #endif

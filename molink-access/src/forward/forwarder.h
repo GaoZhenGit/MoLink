@@ -33,11 +33,12 @@ private:
     void releaseSlot();
 
     AdbClient& m_client;
-    uint16_t m_localPort;
-    uint16_t m_remotePort;
+    const uint16_t m_localPort;
+    const uint16_t m_remotePort;
     SOCKET m_listenSock = INVALID_SOCKET;
     std::atomic<bool> m_running{false};
     std::thread m_thread;
+    bool m_wsaStarted = false;
 
     // 并发控制
     static constexpr int kMaxConnections = 16;

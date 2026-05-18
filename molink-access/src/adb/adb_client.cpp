@@ -29,18 +29,7 @@ AdbClient::~AdbClient() {
 
 bool AdbClient::loadOrGenerateKey() {
     m_rsa.reset(new AdbRsa());
-
-    std::string keyPath = getDefaultKeyPath();
-    if (m_rsa->loadKey(keyPath)) return true;
-
-    LOG_INFO("ADB", "generating new RSA key");
-    if (!m_rsa->generateKey()) {
-        LOG_ERROR("ADB", "RSA key generation failed");
-        return false;
-    }
-
-    m_rsa->saveKey(keyPath);
-    return true;
+    return ::loadOrGenerateKey(*m_rsa);
 }
 
 bool AdbClient::connect(const std::string& serial) {
@@ -61,11 +50,7 @@ bool AdbClient::connect(const std::string& serial) {
     }
     if (!selected) selected = &m_devices[0];
 
-    if (!selected->open()) return false;
-
-    selected->clearHalt(selected->getReadEndpoint());
-    selected->clearHalt(selected->getWriteEndpoint());
-    selected->drainRead();
+    if (!selected->prepare()) return false;
 
     m_serial = selected->getSerial();
     LOG_INFO("ADB", "device %s opened", m_serial.empty() ? "(no serial)" : m_serial.c_str());
@@ -106,16 +91,10 @@ bool AdbClient::connect(const std::string& serial) {
             LOG_INFO("ADB", "retrying in 2s");
             selected->close();
             Sleep(2000);
-            if (!selected->open()) {
+            if (!selected->prepare()) {
                 LOG_ERROR("ADB", "cannot re-open device");
                 return false;
             }
-            // 重新打开后必须清空残留数据，否则下一次 handshake
-            // 会读到旧 session 的消息（A_CLSE、过期 TOKEN 等），
-            // 导致握手反复失败，设备重复弹授权窗。
-            selected->clearHalt(selected->getReadEndpoint());
-            selected->clearHalt(selected->getWriteEndpoint());
-            selected->drainRead();
         }
     }
 

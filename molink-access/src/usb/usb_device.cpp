@@ -6,18 +6,18 @@
 std::vector<UsbDevice> UsbDevice::discover() {
     std::vector<UsbDevice> result;
 
-    libusb_context* ctx = nullptr;
-    int ret = libusb_init(&ctx);
+    libusb_context* rawCtx = nullptr;
+    int ret = libusb_init(&rawCtx);
     if (ret != 0) {
         LOG_ERROR("USB", "libusb_init failed: %s", libusb_error_name(ret));
         return result;
     }
+    auto ctx = std::shared_ptr<libusb_context>(rawCtx, libusb_exit);
 
     libusb_device** devs = nullptr;
-    ssize_t count = libusb_get_device_list(ctx, &devs);
+    ssize_t count = libusb_get_device_list(rawCtx, &devs);
     if (count < 0) {
         LOG_ERROR("USB", "libusb_get_device_list failed: %s", libusb_error_name((int)count));
-        libusb_exit(ctx);
         return result;
     }
 
@@ -70,9 +70,9 @@ std::vector<UsbDevice> UsbDevice::discover() {
     return result;
 }
 
-UsbDevice::UsbDevice(libusb_device* dev, libusb_context* ctx,
+UsbDevice::UsbDevice(libusb_device* dev, std::shared_ptr<libusb_context> ctx,
                      int iface, uint8_t read_ep, uint8_t write_ep)
-    : m_device(dev), m_handle(nullptr), m_ctx(ctx)
+    : m_device(dev), m_handle(nullptr), m_ctx(std::move(ctx))
     , m_read_ep(read_ep), m_write_ep(write_ep)
     , m_interface_number(iface), m_open(false) {}
 
@@ -124,6 +124,14 @@ void UsbDevice::drainRead() {
     while (bulkRead(buf, sizeof(buf), &got, 200))
         drained += got;
     if (drained > 0) LOG_DEBUG("USB", "drained %d bytes stale data", drained);
+}
+
+bool UsbDevice::prepare() {
+    if (!open()) return false;
+    clearHalt(m_read_ep);
+    clearHalt(m_write_ep);
+    drainRead();
+    return true;
 }
 
 bool UsbDevice::clearHalt(uint8_t ep) {

@@ -16,6 +16,16 @@ std::string getDefaultKeyPath() {
     return dir + "molink_key.bin";
 }
 
+bool loadOrGenerateKey(AdbRsa& rsa) {
+    std::string keyPath = getDefaultKeyPath();
+    if (rsa.loadKey(keyPath)) return true;
+    if (rsa.generateKey()) {
+        rsa.saveKey(keyPath);
+        return true;
+    }
+    return false;
+}
+
 AdbRsa::AdbRsa() : m_key(nullptr), m_alg(nullptr) {}
 
 AdbRsa::~AdbRsa() {

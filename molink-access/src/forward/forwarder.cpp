@@ -17,8 +17,11 @@ bool Forwarder::start() {
         return false;
     }
 
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
+    if (!m_wsaStarted) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        m_wsaStarted = true;
+    }
 
     m_listenSock = socket(AF_INET, SOCK_STREAM, 0);
     if (m_listenSock == INVALID_SOCKET) {
@@ -60,6 +63,10 @@ void Forwarder::stop() {
     }
     if (m_thread.joinable()) {
         m_thread.join();
+    }
+    if (m_wsaStarted) {
+        WSACleanup();
+        m_wsaStarted = false;
     }
 }
 
