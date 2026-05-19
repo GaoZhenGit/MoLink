@@ -7,9 +7,12 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdapter.ViewHolder> {
 
@@ -35,7 +38,6 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         return items.size();
     }
 
-    /** 在顶部插入新记录，超量时移除最后一条 */
     public void addTop(ConnectionRecord record) {
         if (items.size() >= MAX_ITEMS) {
             items.remove(items.size() - 1);
@@ -45,12 +47,9 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         notifyItemInserted(0);
     }
 
-    /** 全量更新（由 Handler 定时刷新时调用）。过滤掉 localhost/dadb tunnel 流量，超量时裁剪旧记录。最新连接显示在底部。 */
     public void refreshAll(List<ConnectionRecord> newItems) {
         items.clear();
-        // activeConnections newest-first，所以先反转：oldest-first，再取前 MAX_ITEMS
         List<ConnectionRecord> filtered = new ArrayList<>();
-        // v3 Req 1: synchronizedList 迭代需在 synchronized 块中，防止并发修改
         synchronized (newItems) {
             for (ConnectionRecord r : newItems) {
                 if (r == null) continue;
@@ -63,9 +62,7 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
                 }
             }
         }
-        // 反转： newest-first → oldest-first
         Collections.reverse(filtered);
-        // 取最近的 MAX_ITEMS 条（反转后末尾是最新的）
         int start = Math.max(0, filtered.size() - MAX_ITEMS);
         for (int i = start; i < filtered.size(); i++) {
             items.add(filtered.get(i));
@@ -77,14 +74,17 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
         private final View dot;
         private final TextView targetHost;
         private final TextView protocol;
+        private final TextView startTime;
         private final TextView traffic;
         private final TextView duration;
+        private final SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
         ViewHolder(@NonNull View itemView) {
             super(itemView);
             dot = itemView.findViewById(R.id.connDot);
             targetHost = itemView.findViewById(R.id.connTargetHost);
             protocol = itemView.findViewById(R.id.connProtocol);
+            startTime = itemView.findViewById(R.id.connStartTime);
             traffic = itemView.findViewById(R.id.connTraffic);
             duration = itemView.findViewById(R.id.connDuration);
         }
@@ -99,18 +99,19 @@ public class ConnectionLogAdapter extends RecyclerView.Adapter<ConnectionLogAdap
                 protocol.setBackgroundColor(0xFFE91E63);
             }
 
-            // bytesDown = c->s = 用户上传 = ↑ ; bytesUp = s->c = 用户下载 = ↓
+            startTime.setText(timeFmt.format(new Date(record.startTime)));
+
             long up = record.getBytesDown();
             long down = record.getBytesUp();
-            traffic.setText("\u2193 " + formatBytes(down) + "  \u2191 " + formatBytes(up));
+            traffic.setText("↓ " + formatBytes(down) + "  ↑ " + formatBytes(up));
 
             long secs = record.getDurationSec();
             duration.setText(formatDuration(secs));
 
             if (record.isEnded()) {
-                dot.setBackgroundResource(R.drawable.circle_gray);  // 已结束：灰色
+                dot.setBackgroundResource(R.drawable.circle_gray);
             } else {
-                dot.setBackgroundResource(R.drawable.circle_green);  // 进行中：绿色
+                dot.setBackgroundResource(R.drawable.circle_green);
             }
         }
 

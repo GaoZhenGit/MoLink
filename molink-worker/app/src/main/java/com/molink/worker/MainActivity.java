@@ -62,6 +62,10 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        // 底部版本号
+        TextView verText = findViewById(R.id.versionText);
+        verText.setText(BuildConfig.VERSION_NAME);
+
         statusDot = findViewById(R.id.statusDot);
         statusRunning = findViewById(R.id.statusRunning);
         statusPort = findViewById(R.id.statusPort);
