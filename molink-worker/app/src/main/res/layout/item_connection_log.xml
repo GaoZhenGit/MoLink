@@ -6,21 +6,19 @@
     android:paddingVertical="5dp"
     android:paddingHorizontal="4dp">
 
-    <!-- 第一行：状态点 + 目标地址 -->
+    <!-- 第一行：状态点 + 标签 + 目标地址 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical">
 
-        <!-- 状态指示圆点 -->
         <View
             android:id="@+id/connDot"
             android:layout_width="8dp"
             android:layout_height="8dp"
             android:background="@drawable/circle_gray"/>
 
-        <!-- 协议标签 -->
         <TextView
             android:id="@+id/connProtocol"
             android:layout_width="wrap_content"
@@ -33,7 +31,6 @@
             android:paddingVertical="1dp"
             android:layout_marginStart="6dp"/>
 
-        <!-- 目标地址 -->
         <TextView
             android:id="@+id/connTargetHost"
             android:layout_width="0dp"
@@ -46,29 +43,37 @@
             android:maxLines="1"/>
     </LinearLayout>
 
-    <!-- 第二行：流量 + 在线时长 -->
+    <!-- 第二行：请求时间 + 流量 + 在线时长 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical|start"
+        android:gravity="center_vertical"
         android:layout_marginTop="2dp">
 
-        <!-- 流量 -->
         <TextView
-            android:id="@+id/connTraffic"
+            android:id="@+id/connStartTime"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="\u2193 -- \u2191 --"
-            android:textSize="11sp"
-            android:textColor="#4CAF50"/>
+            android:text="--"
+            android:textSize="10sp"
+            android:textColor="#AAAAAA"/>
 
-        <!-- 在线时长 -->
+        <TextView
+            android:id="@+id/connTraffic"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="↓ -- ↑ --"
+            android:textSize="11sp"
+            android:textColor="#4CAF50"
+            android:layout_marginStart="8dp"/>
+
         <TextView
             android:id="@+id/connDuration"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="  0s"
+            android:text="0s"
             android:textSize="11sp"
             android:textColor="#888888"
             android:layout_marginStart="4dp"/>
