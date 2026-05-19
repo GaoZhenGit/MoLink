@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <filesystem>
 
 #include "daemon/daemon_app.h"
 #include "cli/cli_utils.h"
@@ -266,7 +267,9 @@ int main(int argc, char* argv[]) {
             printf("Usage: molink push <local_file> <remote_path>\n");
             return 1;
         }
-        std::string cmd = std::string("push ") + argv[2] + " " + argv[3];
+        std::error_code ec;
+        std::string local = std::filesystem::absolute(argv[2], ec).string();
+        std::string cmd = "push " + (ec ? argv[2] : local) + " " + argv[3];
         auto resp = sendPipeCmd(cmd);
         if (resp.empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         printf("%s\n", resp.c_str());
@@ -278,7 +281,9 @@ int main(int argc, char* argv[]) {
             printf("Usage: molink pull <remote_path> <local_file>\n");
             return 1;
         }
-        std::string cmd = std::string("pull ") + argv[2] + " " + argv[3];
+        std::error_code ec;
+        std::string local = std::filesystem::absolute(argv[3], ec).string();
+        std::string cmd = "pull " + std::string(argv[2]) + " " + (ec ? argv[3] : local);
         auto resp = sendPipeCmd(cmd);
         if (resp.empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         printf("%s\n", resp.c_str());

@@ -76,7 +76,12 @@ int cmdApush(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string path = argv[2];
+    std::error_code ec;
+    std::string path = fs::absolute(argv[2], ec).string();
+    if (ec) {
+        printf("Cannot resolve path: %s\n", argv[2]);
+        return 1;
+    }
     while (!path.empty() && (path.back() == '\\' || path.back() == '/'))
         path.pop_back();
     std::string rdir = kRemoteDir;
