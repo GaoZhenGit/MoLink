@@ -23,26 +23,32 @@ static BOOL WINAPI ctrlHandler(DWORD type) {
 
 // ---- Named Pipe 客户端 ----
 std::string sendPipeCmd(const std::string& cmd) {
-    HANDLE pipe = CreateFileA("\\\\.\\pipe\\molink",
-        GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (pipe == INVALID_HANDLE_VALUE) return {};
+    // pipe 单实例，Disconnect/Connect 之间有窗口期，重试
+    for (int retry = 0; retry < 15; retry++) {
+        HANDLE pipe = CreateFileA("\\\\.\\pipe\\molink",
+            GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (pipe != INVALID_HANDLE_VALUE) {
+            DWORD mode = PIPE_READMODE_MESSAGE;
+            SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
 
-    DWORD mode = PIPE_READMODE_MESSAGE;
-    SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+            std::string msg = cmd + "\n";
+            DWORD written = 0;
+            WriteFile(pipe, msg.c_str(), (DWORD)msg.size(), &written, nullptr);
 
-    std::string msg = cmd + "\n";
-    DWORD written = 0;
-    WriteFile(pipe, msg.c_str(), (DWORD)msg.size(), &written, nullptr);
+            char buf[4096] = {};
+            DWORD read = 0;
+            ReadFile(pipe, buf, sizeof(buf) - 1, &read, nullptr);
+            CloseHandle(pipe);
 
-    char buf[4096] = {};
-    DWORD read = 0;
-    ReadFile(pipe, buf, sizeof(buf) - 1, &read, nullptr);
-    CloseHandle(pipe);
-
-    std::string result(buf, read);
-    while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
-        result.pop_back();
-    return result;
+            std::string result(buf, read);
+            while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
+                result.pop_back();
+            // 空响应 ≠ 未连接，命令成功执行（如 touch 无声成功）
+            return result;
+        }
+        Sleep(50);
+    }
+    return {};
 }
 
 // ---- status / stop ----
@@ -273,11 +279,11 @@ int main(int argc, char* argv[]) {
             printf("Usage: molink push <local_file> <remote_path>\n");
             return 1;
         }
+        if (sendPipeCmd("status").empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         std::error_code ec;
         std::string local = std::filesystem::absolute(argv[2], ec).string();
         std::string cmd = "push " + (ec ? argv[2] : local) + " " + argv[3];
         auto resp = sendPipeCmd(cmd);
-        if (resp.empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         printf("%s\n", resp.c_str());
         return (resp == "ok") ? 0 : 1;
     }
@@ -287,20 +293,20 @@ int main(int argc, char* argv[]) {
             printf("Usage: molink pull <remote_path> <local_file>\n");
             return 1;
         }
+        if (sendPipeCmd("status").empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         std::error_code ec;
         std::string local = std::filesystem::absolute(argv[3], ec).string();
         std::string cmd = "pull " + std::string(argv[2]) + " " + (ec ? argv[3] : local);
         auto resp = sendPipeCmd(cmd);
-        if (resp.empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         printf("%s\n", resp.c_str());
         return (resp == "ok") ? 0 : 1;
     }
 
     if (strcmp(argv[1], "ls") == 0) {
+        if (sendPipeCmd("status").empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         std::string path = (argc >= 3) ? argv[2] : "/sdcard/";
         std::string cmd = "ls " + path;
         auto resp = sendPipeCmd(cmd);
-        if (resp.empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         printf("%s", resp.c_str());
         return 0;
     }
@@ -310,6 +316,7 @@ int main(int argc, char* argv[]) {
             printf("Usage: molink shell <command>\n");
             return 1;
         }
+        if (sendPipeCmd("status").empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         std::string shellCmd;
         for (int i = 2; i < argc; i++) {
             if (i > 2) shellCmd += " ";
@@ -317,7 +324,6 @@ int main(int argc, char* argv[]) {
         }
         std::string cmd = "shell " + shellCmd;
         auto resp = sendPipeCmd(cmd);
-        if (resp.empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         printf("%s", resp.c_str());
         return 0;
     }

@@ -48,6 +48,7 @@ int cmdInstall(int argc, char* argv[]) {
     printf("Pushing %s ...\n", fname.c_str());
     std::string pushCmd = "push " + absPath + " " + remote;
     auto resp = sendPipeCmd(pushCmd);
+    if (resp.empty()) { printf("Daemon is not running.\n"); return 1; }
     if (resp != "ok") {
         printf("Push failed: %s\n", resp.c_str());
         return 1;
