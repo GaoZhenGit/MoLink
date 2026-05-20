@@ -48,6 +48,7 @@ add_executable(molink
     src/cli/cli_forward.cpp
     src/cli/cli_auth.cpp
     src/cli/cli_install.cpp
+    src/cli/cli_run.cpp
     src/daemon/daemon_app.cpp
     src/forward/forwarder.cpp
     src/transfer/file_push.cpp

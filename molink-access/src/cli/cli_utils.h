@@ -1,6 +1,7 @@
 #ifndef CLI_UTILS_H
 #define CLI_UTILS_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <cstdio>
@@ -31,5 +32,6 @@ int cmdDel(int argc, char* argv[]);
 int cmdForward(int argc, char* argv[]);
 int cmdAuth(int argc, char* argv[]);
 int cmdInstall(int argc, char* argv[]);
+int cmdRun(uint16_t localPort, uint16_t remotePort, const std::string& serial);
 
 #endif

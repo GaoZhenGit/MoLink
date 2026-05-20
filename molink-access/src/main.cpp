@@ -10,17 +10,6 @@
 #include "cli/cli_utils.h"
 #include "version.h"
 
-// ---- 全局（Ctrl+C 用） ----
-static Forwarder* g_forwarder = nullptr;
-static BOOL WINAPI ctrlHandler(DWORD type) {
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
-        printf("\nShutting down...\n");
-        if (g_forwarder) g_forwarder->stop();
-        return TRUE;
-    }
-    return FALSE;
-}
-
 // ---- Named Pipe 客户端 ----
 std::string sendPipeCmd(const std::string& cmd) {
     // pipe 单实例，Disconnect/Connect 之间有窗口期，重试
@@ -152,61 +141,7 @@ static int cmdStart(uint16_t localPort, uint16_t remotePort,
     return 0;
 }
 
-// ---- 前台模式 ----
-static int foregroundMode(uint16_t localPort, uint16_t remotePort,
-                           const std::string& serial) {
-    printf("=== MoLink Access ===\n");
-    printf("Local: 127.0.0.1:%u -> Device tcp:%u\n", localPort, remotePort);
-
-    AdbClient client;
-    HANDLE hDisconnectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    client.setDisconnectEvent(hDisconnectEvent);
-
-    if (!client.connect(serial)) {
-        printf("FAIL: Cannot connect to device\n");
-        CloseHandle(hDisconnectEvent);
-        return 1;
-    }
-    printf("Device: %s\n", client.getSerial().c_str());
-
-    Forwarder forwarder(client, localPort, remotePort);
-    if (!forwarder.start()) {
-        printf("FAIL: Cannot start forwarder\n");
-        CloseHandle(hDisconnectEvent);
-        return 1;
-    }
-
-    g_forwarder = &forwarder;
-    SetConsoleCtrlHandler(ctrlHandler, TRUE);
-    printf("Forwarding active. Press Ctrl+C to stop.\n");
-
-    while (forwarder.isRunning()) {
-        DWORD ret = WaitForSingleObject(hDisconnectEvent, 500);
-        if (ret == WAIT_OBJECT_0) {
-            ResetEvent(hDisconnectEvent);
-            printf("\n[Device disconnected, reconnecting...]\n");
-            forwarder.pause();
-            client.disconnect();
-
-            bool reconnected = false;
-            while (!reconnected && forwarder.isRunning()) {
-                Sleep(1000);
-                printf("[Reconnect attempt...]\n");
-                if (client.connect(serial)) {
-                    forwarder.resume();
-                    reconnected = true;
-                    printf("[Reconnected]\n");
-                }
-            }
-            if (!reconnected) break;
-        }
-    }
-    CloseHandle(hDisconnectEvent);
-
-    printf("MoLink stopped.\n");
-    return 0;
-}
-
+// ---- 幫助 ----
 // ---- 幫助 ----
 static void printUsage() {
     printf("MoLink Access - ADB USB Proxy\n\n"
@@ -361,7 +296,7 @@ int main(int argc, char* argv[]) {
         DaemonApp app(localPort, remotePort, serial);
         return app.run();
     }
-    if (isRun)    return foregroundMode(localPort, remotePort, serial);
+    if (isRun)    return cmdRun(localPort, remotePort, serial);
 
     printf("Unknown command: %s\n", argv[1]);
     printUsage();

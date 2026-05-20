@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <memory>
 
 // ============================================================
@@ -155,12 +156,23 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
         std::string local = args.substr(space + 1);
         return pullFile(m_client, remote, local);
     }
-    if (cmd.rfind("forward ", 0) == 0) {
-        std::string args = cmd.substr(8);
-        size_t space = args.find(' ');
-        if (space == std::string::npos) return "fail: Usage: forward <localPort> <remotePort>";
-        uint16_t lp = (uint16_t)atoi(args.substr(0, space).c_str());
-        uint16_t rp = (uint16_t)atoi(args.substr(space + 1).c_str());
+    if (cmd.rfind("forward", 0) == 0) {
+        uint16_t lp = 1080, rp = 1081;
+        bool lpSet = false;
+        std::istringstream iss(cmd);
+        std::string tok;
+        while (iss >> tok) {
+            if (tok == "forward") continue;
+            if ((tok == "-p" || tok == "--port") && !iss.eof()) {
+                std::string val; iss >> val; lp = (uint16_t)atoi(val.c_str()); lpSet = true;
+            } else if ((tok == "-r" || tok == "--rport") && !iss.eof()) {
+                std::string val; iss >> val; rp = (uint16_t)atoi(val.c_str());
+            } else if (tok.find('-') != 0) {
+                // 裸数字：第一个是 lp，第二个是 rp
+                if (!lpSet) { lp = (uint16_t)atoi(tok.c_str()); lpSet = true; }
+                else { rp = (uint16_t)atoi(tok.c_str()); }
+            }
+        }
 
         if (m_forwarder) {
             m_forwarder->stop();
@@ -182,6 +194,32 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
             path = cmd.substr(3);
         }
         return listFiles(m_client, path);
+    }
+    if (cmd.rfind("install ", 0) == 0) {
+        // push + pm install + cleanup，和 cli_install.cpp 逻辑一致
+        std::string args = cmd.substr(8);
+        // 解析 -r/-d/-g 等标志和 apk 路径
+        std::string apkPath, flags;
+        std::istringstream iss(args);
+        std::string tok;
+        while (iss >> tok) {
+            if (tok[0] == '-') flags += " " + tok;
+            else apkPath = tok;
+        }
+        if (apkPath.empty()) return "fail: Usage: install [options] <apk>";
+        std::string fname = apkPath;
+        size_t pos = fname.find_last_of("\\/");
+        if (pos != std::string::npos) fname = fname.substr(pos + 1);
+        std::string remote = "/data/local/tmp/" + fname;
+
+        std::string pushResult = pushFile(m_client, apkPath, remote);
+        if (pushResult != "ok") return "fail: Push failed: " + pushResult;
+
+        std::string installResult = shellCommand(m_client, "pm install" + flags + " " + remote);
+        std::string rmResult = shellCommand(m_client, "rm " + remote);
+        (void)rmResult;
+        if (installResult.find("Success") != std::string::npos) return "ok";
+        return "fail: " + installResult;
     }
     if (cmd.rfind("del ", 0) == 0) {
         std::string path = cmd.substr(4);
