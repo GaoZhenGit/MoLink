@@ -30,5 +30,6 @@ int cmdDevices();
 int cmdDel(int argc, char* argv[]);
 int cmdForward(int argc, char* argv[]);
 int cmdAuth(int argc, char* argv[]);
+int cmdInstall(int argc, char* argv[]);
 
 #endif

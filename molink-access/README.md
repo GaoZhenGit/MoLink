@@ -68,6 +68,7 @@ molink adel     [--rdir R]        交互式删除远程文件
 molink ls       [remote_path]    列出设备目录
 molink del      <remote_path>    删除设备文件
 molink shell    <command>        执行 shell 命令
+molink install  [options] <apk>   安装 APK（push + pm install）
 molink -v / --version            显示版本号
 ```
 
@@ -98,6 +99,9 @@ curl --socks5 127.0.0.1:1080 https://www.baidu.com
 # 文件传输
 .\molink.exe push .\test.txt /sdcard/test.txt
 .\molink.exe pull /sdcard/test.txt .\downloaded.txt
+
+# APK 安装
+.\molink.exe install -r .\app-release.apk
 
 # 版本号
 .\molink.exe -v             # → v2026.05.15.1530
@@ -222,7 +226,7 @@ molink-access/
     │   ├── cli_devices.cpp        # 设备列表
     │   ├── cli_forward.cpp        # 端口转发命令
     │   ├── named_pipe.h/cpp       # Named Pipe Server
-    │   └── cli_{apush,apull,adel,del}.cpp  # 文件管理命令
+    │   └── cli_{apush,apull,adel,del,install}.cpp  # 文件管理命令
     ├── daemon/
     │   └── daemon_app.h/cpp       # 守护进程主类
     ├── forward/

@@ -45,7 +45,7 @@ std::string sendPipeCmd(const std::string& cmd) {
     return result;
 }
 
-// ---- status / stop（简单 pipe 命令，保留在主文件） ----
+// ---- status / stop ----
 
 static int cmdStatus() {
     auto resp = sendPipeCmd("status");
@@ -201,7 +201,7 @@ static int foregroundMode(uint16_t localPort, uint16_t remotePort,
     return 0;
 }
 
-// ---- 帮助 ----
+// ---- 幫助 ----
 static void printUsage() {
     printf("MoLink Access - ADB USB Proxy\n\n"
            "Usage:\n"
@@ -218,6 +218,7 @@ static void printUsage() {
            "  molink pull     <remote> <local>  Download file from device\n"
            "  molink apush    <path> [--rdir R] Auto upload (zip + .gitignore)\n"
            "  molink apull    [--rdir R]        Interactive auto download + unzip\n"
+           "  molink install  [options] <apk>    Install APK\n"
            "\n"
            "  molink ls       [remote_path]     List device directory\n"
            "  molink del      <remote_path>     Delete file on device\n"
@@ -232,6 +233,11 @@ static void printUsage() {
            "\n"
            "Options (apush/apull/adel):\n"
            "  --rdir <remote_dir>              Remote directory (default: /sdcard/tmp)\n"
+           "\n"
+           "Options (install):\n"
+           "  -r                               Replace existing application\n"
+           "  -d                               Allow downgrade\n"
+           "  -g                               Grant all runtime permissions\n"
            "\n"
            "  molink --help, -h                Show this help\n");
 }
@@ -254,14 +260,14 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // ---- 无连接命令 ----
+    // 无连接命令
     if (strcmp(argv[1], "devices") == 0) return cmdDevices();
     if (strcmp(argv[1], "auth") == 0)    return cmdAuth(argc, argv);
     if (strcmp(argv[1], "status") == 0)  return cmdStatus();
     if (strcmp(argv[1], "stop") == 0)    return cmdStop();
     if (strcmp(argv[1], "forward") == 0) return cmdForward(argc, argv);
 
-    // ---- 需要 daemon 的 thin 管道命令 ----
+    // 需要 daemon 的管道命令
     if (strcmp(argv[1], "push") == 0) {
         if (argc < 4) {
             printf("Usage: molink push <local_file> <remote_path>\n");
@@ -316,13 +322,14 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // ---- 复杂命令（已拆分到 cli/） ----
-    if (strcmp(argv[1], "del") == 0)    return cmdDel(argc, argv);
-    if (strcmp(argv[1], "adel") == 0)   return cmdAdel(argc, argv);
-    if (strcmp(argv[1], "apush") == 0)  return cmdApush(argc, argv);
-    if (strcmp(argv[1], "apull") == 0)  return cmdApull(argc, argv);
+    // 复杂命令（已拆分到 cli/）
+    if (strcmp(argv[1], "del") == 0)     return cmdDel(argc, argv);
+    if (strcmp(argv[1], "adel") == 0)    return cmdAdel(argc, argv);
+    if (strcmp(argv[1], "apush") == 0)   return cmdApush(argc, argv);
+    if (strcmp(argv[1], "apull") == 0)   return cmdApull(argc, argv);
+    if (strcmp(argv[1], "install") == 0) return cmdInstall(argc, argv);
 
-    // ---- 解析 options（run / start / --daemon） ----
+    // 解析 options（run / start / --daemon）
     uint16_t localPort = 1080;
     uint16_t remotePort = 1081;
     std::string serial;

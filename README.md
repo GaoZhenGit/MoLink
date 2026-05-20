@@ -48,6 +48,12 @@ Install `molink-worker.apk`. Launch the app and toggle the switch to start the p
 .\molink.exe ls /sdcard/
 ```
 
+### APK Install
+
+```powershell
+.\molink.exe install -r .\app-release.apk
+```
+
 ## Build
 
 ```powershell

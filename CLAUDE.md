@@ -77,6 +77,7 @@ molink auth     [-s serial]       触发设备授权弹窗
 molink forward  [options]         启动端口转发（需 daemon 运行）
 molink push     <local> <remote>  上传文件/目录到设备
 molink pull     <remote> <local>  下载文件/目录到设备
+molink install  [options] <apk>   安装 APK（push + pm install）
 molink ls       [remote_path]     列出设备目录
 molink del      <remote_path>     删除设备文件
 molink shell    <command>         执行设备 shell 命令
