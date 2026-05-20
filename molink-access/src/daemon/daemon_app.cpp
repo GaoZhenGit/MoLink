@@ -1,4 +1,5 @@
 #include "daemon_app.h"
+#include "../cli/cli_utils.h"
 #include "../transfer/file_push.h"
 #include "../transfer/file_pull.h"
 #include "../transfer/file_list.h"
@@ -141,23 +142,27 @@ std::string DaemonApp::onPipeCommand(const std::string& cmd) {
         return result;
     }
     if (cmd.rfind("push ", 0) == 0) {
-        std::string args = cmd.substr(5);
-        size_t space = args.find(' ');
-        if (space == std::string::npos) return "fail: Usage: push <local> <remote>";
-        std::string local = args.substr(0, space);
-        std::string remote = args.substr(space + 1);
+        // push <local> <remote> -- 用最后一个空格切分，local 可含空格
+        size_t first = cmd.find(' ');
+        size_t last  = cmd.rfind(' ');
+        if (first == std::string::npos || first == last)
+            return "fail: Usage: push <local> <remote>";
+        std::string local = cmd.substr(first + 1, last - first - 1);
+        std::string remote = cmd.substr(last + 1);
         return pushFile(m_client, local, remote);
     }
     if (cmd.rfind("pull ", 0) == 0) {
-        std::string args = cmd.substr(5);
-        size_t space = args.find(' ');
-        if (space == std::string::npos) return "fail: Usage: pull <remote> <local>";
-        std::string remote = args.substr(0, space);
-        std::string local = args.substr(space + 1);
+        // pull <remote> <local> -- 用第一个空格后的第二个空格切分
+        size_t first = cmd.find(' ');
+        size_t second = cmd.find(' ', first + 1);
+        if (first == std::string::npos || second == std::string::npos)
+            return "fail: Usage: pull <remote> <local>";
+        std::string remote = cmd.substr(first + 1, second - first - 1);
+        std::string local = cmd.substr(second + 1);
         return pullFile(m_client, remote, local);
     }
     if (cmd.rfind("forward", 0) == 0) {
-        uint16_t lp = 1080, rp = 1081;
+        uint16_t lp = kDefaultLocalPort, rp = kDefaultRemotePort;
         bool lpSet = false;
         std::istringstream iss(cmd);
         std::string tok;

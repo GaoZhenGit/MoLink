@@ -6,8 +6,8 @@
 
 // ---- forward 命令 ----
 int cmdForward(int argc, char* argv[]) {
-    uint16_t lp = 1080;
-    uint16_t rp = 1081;
+    uint16_t lp = kDefaultLocalPort;
+    uint16_t rp = kDefaultRemotePort;
 
     for (int i = 2; i < argc; i++) {
         if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc)

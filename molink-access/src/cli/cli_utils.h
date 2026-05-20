@@ -9,6 +9,8 @@
 // ---- 公共常量 ----
 const char kRemoteDir[] = "/sdcard/tmp";
 const char kEncodePrefix[] = "b64_";
+constexpr uint16_t kDefaultLocalPort  = 1080;
+constexpr uint16_t kDefaultRemotePort = 1081;
 
 // ---- Named Pipe 客户端（由 main.cpp 实现） ----
 std::string sendPipeCmd(const std::string& cmd);

@@ -271,8 +271,8 @@ int main(int argc, char* argv[]) {
     if (strcmp(argv[1], "install") == 0) return cmdInstall(argc, argv);
 
     // 解析 options（run / start / --daemon）
-    uint16_t localPort = 1080;
-    uint16_t remotePort = 1081;
+    uint16_t localPort = kDefaultLocalPort;
+    uint16_t remotePort = kDefaultRemotePort;
     std::string serial;
     bool isRun = (strcmp(argv[1], "run") == 0);
     bool isStart = (strcmp(argv[1], "start") == 0);
