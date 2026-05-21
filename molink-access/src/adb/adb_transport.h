@@ -59,7 +59,6 @@ public:
 
     bool hadFatalError() const;
     bool hadProtocolError() const { return m_protocolError; }
-    void clearProtocolError() { m_protocolError = false; }
     const std::vector<uint8_t>& getAuthToken() const { return m_auth_token; }
     static uint32_t checksum(const uint8_t* data, uint32_t len) {
         uint32_t sum = 0;

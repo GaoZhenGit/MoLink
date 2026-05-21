@@ -16,8 +16,11 @@ bool AdbTransport::readExact(void* buf, uint32_t len, uint32_t timeout_ms) {
     int remain = (int)len;
     while (remain > 0) {
         int bytes = 0;
-        if (!m_device.bulkRead(p, remain, &bytes, (int)timeout_ms))
+        if (!m_device.bulkRead(p, remain, &bytes, (int)timeout_ms)) {
+            // 超时或错误：如果已读到部分数据则继续读，避免字节流错位
+            if (bytes > 0) { p += bytes; remain -= bytes; continue; }
             return false;
+        }
         if (bytes == 0) return false;
         p += bytes;
         remain -= bytes;
@@ -30,8 +33,10 @@ bool AdbTransport::writeExact(const void* buf, uint32_t len, uint32_t timeout_ms
     int remain = (int)len;
     while (remain > 0) {
         int bytes = 0;
-        if (!m_device.bulkWrite(p, remain, &bytes, (int)timeout_ms))
+        if (!m_device.bulkWrite(p, remain, &bytes, (int)timeout_ms)) {
+            if (bytes > 0) { p += bytes; remain -= bytes; continue; }
             return false;
+        }
         p += bytes;
         remain -= bytes;
     }

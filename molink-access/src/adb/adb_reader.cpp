@@ -29,11 +29,11 @@ void AdbReader::readLoop() {
         AdbMessage msg;
         std::vector<uint8_t> data;
         if (!m_transport->recv(msg, data, 100)) {
-            // Trigger disconnect on fatal USB errors or protocol errors (bad magic, etc.)
-            // Normal timeouts during idle are NOT fatal.
-            if ((m_transport->hadFatalError() || m_transport->hadProtocolError()) && m_onDisconnect) {
-                LOG_ERROR("ADB", "fatal error USB=%d protocol=%d, disconnecting",
-                          m_transport->hadFatalError(), m_transport->hadProtocolError());
+            // 仅 USB 硬件错误触发断连。超时或协议错位静默继续——
+            // bad magic 时 24 字节已消费，下一次 recv 可能自然重对齐；
+            // 若某 channel 数据丢失，应用层 TCP 自然重传。
+            if (m_transport->hadFatalError() && m_onDisconnect) {
+                LOG_ERROR("ADB", "fatal USB error, disconnecting");
                 m_onDisconnect();
                 while (m_running) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
