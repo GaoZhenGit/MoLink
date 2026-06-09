@@ -5,6 +5,7 @@
 #include "../transfer/file_list.h"
 #include "../adb/adb_shell.h"
 #include "../usb/usb_device.h"
+#include "../utils/win_utils.h"
 
 #include "log.h"
 #include <cstdio>
@@ -12,23 +13,27 @@
 #include <cstring>
 #include <sstream>
 #include <memory>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 // ============================================================
 // PID 文件
 // ============================================================
 
 std::string getPidPath() {
-    char dir[MAX_PATH];
-    GetModuleFileNameA(nullptr, dir, sizeof(dir));
-    char* lastSlash = strrchr(dir, '\\');
-    if (!lastSlash) lastSlash = strrchr(dir, '/');
-    if (lastSlash) *(lastSlash + 1) = '\0';
-    return std::string(dir) + "molinkd.pid";
+    wchar_t dir[MAX_PATH];
+    GetModuleFileNameW(nullptr, dir, MAX_PATH);
+    std::wstring wdir(dir);
+    size_t lastSlash = wdir.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos)
+        wdir = wdir.substr(0, lastSlash + 1);
+    return wideToUtf8(wdir.c_str()) + "molinkd.pid";
 }
 
 void writePidFile() {
     auto path = getPidPath();
-    FILE* f = fopen(path.c_str(), "w");
+    FILE* f = fopenUtf8(path.c_str(), "w");
     if (f) {
         fprintf(f, "%lu", GetCurrentProcessId());
         fclose(f);
@@ -37,7 +42,7 @@ void writePidFile() {
 
 DWORD readPidFile() {
     auto path = getPidPath();
-    FILE* f = fopen(path.c_str(), "r");
+    FILE* f = fopenUtf8(path.c_str(), "r");
     if (!f) return 0;
     DWORD pid = 0;
     fscanf(f, "%lu", &pid);
@@ -47,7 +52,7 @@ DWORD readPidFile() {
 
 void removePidFile() {
     auto path = getPidPath();
-    remove(path.c_str());
+    fs::remove(fs::u8path(path));
 }
 
 // ============================================================
@@ -269,12 +274,13 @@ int DaemonApp::run() {
         return 1;
     }
 
-    char exeDir[MAX_PATH];
-    GetModuleFileNameA(nullptr, exeDir, sizeof(exeDir));
-    char* lastSlash = strrchr(exeDir, '\\');
-    if (!lastSlash) lastSlash = strrchr(exeDir, '/');
-    if (lastSlash) *(lastSlash + 1) = '\0';
-    std::string logPath = std::string(exeDir) + "molinkd.log";
+    wchar_t exeDir[MAX_PATH];
+    GetModuleFileNameW(nullptr, exeDir, MAX_PATH);
+    std::wstring wdir(exeDir);
+    size_t lastSlash = wdir.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos)
+        wdir = wdir.substr(0, lastSlash + 1);
+    std::string logPath = wideToUtf8(wdir.c_str()) + "molinkd.log";
 
     freopen(logPath.c_str(), "w", stdout);
     freopen(logPath.c_str(), "a", stderr);

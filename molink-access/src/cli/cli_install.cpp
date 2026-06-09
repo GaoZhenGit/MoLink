@@ -1,9 +1,12 @@
 #include "cli_utils.h"
+#include "../utils/win_utils.h"
 
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <filesystem>
+
+namespace fs = std::filesystem;
 
 int cmdInstall(int argc, char* argv[]) {
     if (argc < 3) {
@@ -30,9 +33,9 @@ int cmdInstall(int argc, char* argv[]) {
     }
 
     std::error_code ec;
-    std::string absPath = std::filesystem::absolute(apkPath, ec).string();
-    if (ec) absPath = apkPath;
-    if (!std::filesystem::exists(absPath)) {
+    fs::path absInput = fs::absolute(fs::u8path(apkPath), ec);
+    std::string absPath = ec ? apkPath : pathToUtf8(absInput);
+    if (!fs::exists(absInput)) {
         printf("APK not found: %s\n", apkPath.c_str());
         return 1;
     }
@@ -42,10 +45,10 @@ int cmdInstall(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string fname = std::filesystem::path(absPath).filename().string();
+    std::string fname = absInput.filename().u8string();
     std::string remote = "/data/local/tmp/" + fname;
 
-    printf("Pushing %s ...\n", fname.c_str());
+    printf("Pushing %s ...\n", utf8ForConsole(fname).c_str());
     std::string pushCmd = "push " + absPath + " " + remote;
     auto resp = sendPipeCmd(pushCmd);
     if (resp.empty()) { printf("Daemon is not running.\n"); return 1; }

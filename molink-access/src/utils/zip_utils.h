@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <direct.h>
 #include <windows.h>
+#include <filesystem>
+#include "win_utils.h"
 
 // Minimal ZIP "store" (no compression) read/write.
-// Zero dependencies — just C++17 + Win32.
+// C++17 + Win32 + win_utils (UTF-8 path support).
 
 namespace zip {
 
@@ -49,7 +51,7 @@ struct ZipEntry {
 
 inline bool writeZip(const std::string& zipPath,
                      const std::vector<ZipEntry>& entries) {
-    FILE* f = fopen(zipPath.c_str(), "wb");
+    FILE* f = fopenUtf8(zipPath.c_str(), "wb");
     if (!f) return false;
 
     struct LocalHdr {
@@ -182,7 +184,7 @@ struct ZipWriter {
     };
 
     bool open(const std::string& path) {
-        f = fopen(path.c_str(), "wb");
+        f = fopenUtf8(path.c_str(), "wb");
         return f != nullptr;
     }
 
@@ -256,7 +258,7 @@ struct ZipWriter {
 inline bool extractZip(const std::string& zipPath,
                        const std::string& destDir,
                        int* outFileCount = nullptr) {
-    FILE* f = fopen(zipPath.c_str(), "rb");
+    FILE* f = fopenUtf8(zipPath.c_str(), "rb");
     if (!f) return false;
 
     // Find EOCD (search last 64KB)
@@ -348,14 +350,20 @@ inline bool extractZip(const std::string& zipPath,
             std::string parent = outPath.substr(0, lastSep);
             std::string partial;
             for (char c : parent) {
-                if (c == '\\') CreateDirectoryA(partial.c_str(), nullptr);
+                if (c == '\\') {
+                    std::wstring wpartial = utf8ToWide(partial);
+                    CreateDirectoryW(wpartial.c_str(), nullptr);
+                }
                 partial += c;
             }
-            CreateDirectoryA(partial.c_str(), nullptr);
+            {
+                std::wstring wpartial = utf8ToWide(partial);
+                CreateDirectoryW(wpartial.c_str(), nullptr);
+            }
         }
 
         // Write file
-        FILE* out = fopen(outPath.c_str(), "wb");
+        FILE* out = fopenUtf8(outPath.c_str(), "wb");
         if (out) {
             fwrite(fileData.data(), 1, fileData.size(), out);
             fclose(out);

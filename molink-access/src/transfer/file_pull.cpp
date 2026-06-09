@@ -2,6 +2,7 @@
 #include "../adb/adb_client.h"
 #include "../adb/adb_reader.h"
 #include "../adb/adb_sync.h"
+#include "../utils/win_utils.h"
 #include <cstdio>
 #include "log.h"
 #include <cstring>
@@ -34,7 +35,7 @@ std::string pullFile(AdbClient& client,
         return buf;
     }
 
-    FILE* f = fopen(localPath.c_str(), "wb");
+    FILE* f = fopenUtf8(localPath.c_str(), "wb");
     if (!f) {
         client.closeChannel(ch);
         return "fail: Cannot create local file";

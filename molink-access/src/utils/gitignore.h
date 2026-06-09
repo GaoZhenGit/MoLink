@@ -6,6 +6,9 @@
 #include <fstream>
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 class GitignoreMatcher {
 public:
@@ -35,7 +38,7 @@ inline std::string findGitignore(const std::string& folderPath) {
         folderGi.pop_back();
     folderGi += "/.gitignore";
 
-    std::ifstream test2(folderGi);
+    std::ifstream test2(fs::u8path(folderGi));
     if (test2.good()) return folderGi;
 
     return "";
@@ -43,7 +46,7 @@ inline std::string findGitignore(const std::string& folderPath) {
 
 inline bool GitignoreMatcher::load(const std::string& gitignorePath) {
     m_rules.clear();
-    std::ifstream f(gitignorePath);
+    std::ifstream f(fs::u8path(gitignorePath));
     if (!f.good()) return false;
 
     std::string line;

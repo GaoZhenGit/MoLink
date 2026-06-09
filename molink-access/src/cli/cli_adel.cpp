@@ -1,5 +1,6 @@
 #include "cli_utils.h"
 #include "base64.h"
+#include "../utils/win_utils.h"
 
 #include <cstdio>
 #include <cstring>
@@ -35,7 +36,7 @@ int cmdAdel(int argc, char* argv[]) {
     printf("\n=== Select file to delete ===\n");
     for (size_t i = 0; i < files.size(); i++) {
         const char* tag = files[i].isZip ? " [ZIP]" : "";
-        printf("  [%zu] %s%s\n", i, files[i].displayName.c_str(), tag);
+        printf("  [%zu] %s%s\n", i, utf8ForConsole(files[i].displayName).c_str(), tag);
     }
     printf("  [a] Delete ALL listed files\n");
 
@@ -61,10 +62,10 @@ int cmdAdel(int argc, char* argv[]) {
             std::string delCmd = "del " + rdir + "/" + f.rawName;
             auto resp = sendPipeCmd(delCmd);
             if (resp == "ok") {
-                printf("Deleted: %s\n", f.displayName.c_str());
+                printf("Deleted: %s\n", utf8ForConsole(f.displayName).c_str());
                 deleted++;
             } else {
-                printf("Failed: %s (%s)\n", f.displayName.c_str(), resp.c_str());
+                printf("Failed: %s (%s)\n", utf8ForConsole(f.displayName).c_str(), resp.c_str());
             }
         }
     } else {
@@ -77,7 +78,7 @@ int cmdAdel(int argc, char* argv[]) {
         std::string delCmd = "del " + rdir + "/" + selected.rawName;
         auto resp = sendPipeCmd(delCmd);
         if (resp == "ok") {
-            printf("Deleted: %s\n", selected.displayName.c_str());
+            printf("Deleted: %s\n", utf8ForConsole(selected.displayName).c_str());
             deleted++;
         } else {
             printf("Failed: %s\n", resp.c_str());

@@ -12,6 +12,14 @@
 - **依赖**：libusb 1.0.28（静态编译）、BCrypt、Winsock2
 - **自实现**：ADB 协议栈、RSA 密钥管理、USB 设备发现、端口转发
 
+### 编码约定
+
+- **内部编码**：全程 UTF-8。`main()` 通过 `GetCommandLineW()` + `CommandLineToArgvW()` 绕过 MinGW `argv[]` 的 ANSI 代码页损耗，转为 UTF-8
+- **路径处理**：`fs::u8path(str)` 构造，`path.u8string()` 导出，禁止用 `path.string()`（C locale 丢中文）
+- **文件 I/O**：`fopenUtf8()` 封装 `_wfopen`，Win32 API 统一用 `W` 版本（`GetTempPathW`、`CreateDirectoryW`、`CreateProcessW` 等）
+- **控制台输出**：`utf8ForConsole()` 将 UTF-8 转为当前控制台代码页（Win10 1903+ 直接设 `CP_UTF8`，旧版回退到 `CP_ACP`/GBK）
+- **工具头文件**：`src/utils/win_utils.h`（`WideArgv`、`Utf8Args`、`wideToUtf8`/`utf8ToWide`、`fopenUtf8`、`utf8ForConsole`）
+
 ### 架构
 
 ```

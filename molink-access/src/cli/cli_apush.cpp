@@ -2,6 +2,7 @@
 #include "base64.h"
 #include "gitignore.h"
 #include "zip_utils.h"
+#include "../utils/win_utils.h"
 
 #include <cstdio>
 #include <cstring>
@@ -22,18 +23,20 @@ static std::string compressFolder(const std::string& folderPath,
         return "fail: Cannot create zip file";
 
     std::error_code ec;
-    std::string base = fs::absolute(folderPath, ec).string();
+    fs::path basePath = fs::absolute(fs::u8path(folderPath), ec);
     if (ec) return "fail: Cannot resolve folder path";
+
+    std::string base = basePath.u8string();
     std::replace(base.begin(), base.end(), '\\', '/');
     if (!base.empty() && base.back() != '/') base += '/';
 
     int fileCount = 0;
-    auto it = fs::recursive_directory_iterator(base, ec);
+    auto it = fs::recursive_directory_iterator(basePath, ec);
     auto end = fs::recursive_directory_iterator();
     for (; it != end && !ec; ++it) {
         auto& entry = *it;
 
-        std::string absPath = entry.path().string();
+        std::string absPath = entry.path().u8string();
         std::replace(absPath.begin(), absPath.end(), '\\', '/');
 
         std::string relPath;
@@ -54,7 +57,7 @@ static std::string compressFolder(const std::string& folderPath,
             std::string dirEntry = relPath + "/";
             writer.addFile(dirEntry, nullptr, 0);
         } else {
-            std::ifstream f(absPath, std::ios::binary);
+            std::ifstream f(entry.path(), std::ios::binary);
             if (!f.good()) continue;
             std::string content((std::istreambuf_iterator<char>(f)),
                                  std::istreambuf_iterator<char>());
@@ -77,13 +80,15 @@ int cmdApush(int argc, char* argv[]) {
     }
 
     std::error_code ec;
-    std::string path = fs::absolute(argv[2], ec).string();
+    fs::path inputPath = fs::absolute(fs::u8path(argv[2]), ec);
     if (ec) {
-        printf("Cannot resolve path: %s\n", argv[2]);
+        printf("Cannot resolve path: %s\n", utf8ForConsole(argv[2]).c_str());
         return 1;
     }
+    std::string path = inputPath.u8string();
     while (!path.empty() && (path.back() == '\\' || path.back() == '/'))
         path.pop_back();
+
     std::string rdir = kRemoteDir;
 
     enum { AUTO, ENABLED, DISABLED } gitMode = AUTO;
@@ -93,8 +98,8 @@ int cmdApush(int argc, char* argv[]) {
         else if (strcmp(argv[i], "--rdir") == 0 && i + 1 < argc) rdir = argv[++i];
     }
 
-    if (!fs::exists(path)) {
-        printf("File/directory not found: %s\n", path.c_str());
+    if (!fs::exists(inputPath)) {
+        printf("File/directory not found: %s\n", utf8ForConsole(path).c_str());
         return 1;
     }
 
@@ -103,11 +108,11 @@ int cmdApush(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string originalName = fs::path(path).filename().string();
+    std::string originalName = inputPath.filename().u8string();
     GitignoreMatcher gitSpec;
     int ignoredCount = 0;
 
-    if (fs::is_directory(path)) {
+    if (fs::is_directory(inputPath)) {
         bool useGitignore = false;
         std::string gitignorePath;
 
@@ -121,20 +126,20 @@ int cmdApush(int argc, char* argv[]) {
 
         if (useGitignore) {
             gitSpec.load(gitignorePath);
-            std::error_code ec;
-            std::string base = fs::absolute(path, ec).string();
+            std::error_code ec2;
+            std::string base = inputPath.u8string();
             std::replace(base.begin(), base.end(), '\\', '/');
             if (!base.empty() && base.back() != '/') base += '/';
-            auto it2 = fs::recursive_directory_iterator(base, ec);
+            auto it2 = fs::recursive_directory_iterator(inputPath, ec2);
             auto end2 = fs::recursive_directory_iterator();
-            for (; it2 != end2 && !ec; ++it2) {
+            for (; it2 != end2 && !ec2; ++it2) {
                 auto& entry = *it2;
-                std::string absPath = entry.path().string();
+                std::string absPath = entry.path().u8string();
                 std::replace(absPath.begin(), absPath.end(), '\\', '/');
                 std::string rel;
                 if (absPath.size() >= base.size()) rel = absPath.substr(base.size());
                 if (rel.find(".git/") == 0 || rel == ".git" || rel == ".gitignore") continue;
-                bool isDir = entry.is_directory(ec);
+                bool isDir = entry.is_directory(ec2);
                 if (gitSpec.hasRules() && gitSpec.isIgnored(rel, isDir)) {
                     if (isDir) it2.disable_recursion_pending();
                     ignoredCount++;
@@ -144,9 +149,9 @@ int cmdApush(int argc, char* argv[]) {
         }
 
         printf("Directory detected, compressing...\n");
-        char tempDir[MAX_PATH];
-        GetTempPathA(sizeof(tempDir), tempDir);
-        std::string zipPath = std::string(tempDir) + originalName + ".molink.zip";
+        wchar_t tempDir[MAX_PATH];
+        GetTempPathW(MAX_PATH, tempDir);
+        std::string zipPath = wideToUtf8(tempDir) + originalName + ".molink.zip";
 
         std::string result = compressFolder(path, zipPath,
                                             (useGitignore ? &gitSpec : nullptr));
@@ -160,10 +165,10 @@ int cmdApush(int argc, char* argv[]) {
         auto resp = sendPipeCmd(pipeCmd);
         printf("%s\n", resp.c_str());
 
-        remove(zipPath.c_str());
+        fs::remove(fs::u8path(zipPath));
 
         if (resp == "ok") {
-            printf("Uploaded directory: %s -> %s/%s\n", originalName.c_str(), rdir.c_str(), remoteName.c_str());
+            printf("Uploaded directory: %s -> %s/%s\n", utf8ForConsole(originalName).c_str(), rdir.c_str(), remoteName.c_str());
             if (ignoredCount > 0) printf("(%d path(s) ignored)\n", ignoredCount);
         }
         return (resp == "ok") ? 0 : 1;
@@ -174,7 +179,7 @@ int cmdApush(int argc, char* argv[]) {
         auto resp = sendPipeCmd(pipeCmd);
         printf("%s\n", resp.c_str());
         if (resp == "ok") {
-            printf("Uploaded: %s -> %s/%s\n", originalName.c_str(), rdir.c_str(), remoteName.c_str());
+            printf("Uploaded: %s -> %s/%s\n", utf8ForConsole(originalName).c_str(), rdir.c_str(), remoteName.c_str());
         }
         return (resp == "ok") ? 0 : 1;
     }

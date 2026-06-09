@@ -8,6 +8,7 @@
 
 #include "daemon/daemon_app.h"
 #include "cli/cli_utils.h"
+#include "utils/win_utils.h"
 #include "version.h"
 
 // ---- Named Pipe 客户端 ----
@@ -32,7 +33,6 @@ std::string sendPipeCmd(const std::string& cmd) {
             std::string result(buf, read);
             while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
                 result.pop_back();
-            // 空响应 ≠ 未连接，命令成功执行（如 touch 无声成功）
             return result;
         }
         Sleep(50);
@@ -92,19 +92,22 @@ static int cmdStart(uint16_t localPort, uint16_t remotePort,
         Sleep(1500);
     }
 
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(nullptr, exePath, sizeof(exePath));
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
 
-    std::string cmdLine = "\"" + std::string(exePath) + "\" --daemon";
-    cmdLine += " -p " + std::to_string(localPort);
-    cmdLine += " -r " + std::to_string(remotePort);
-    if (!serial.empty()) cmdLine += " -s " + serial;
+    std::wstring cmdLine = L"\"" + std::wstring(exePath) + L"\" --daemon";
+    cmdLine += L" -p " + std::to_wstring(localPort);
+    cmdLine += L" -r " + std::to_wstring(remotePort);
+    if (!serial.empty()) {
+        std::wstring wserial = utf8ToWide(serial);
+        cmdLine += L" -s " + wserial;
+    }
 
-    STARTUPINFOA si = {};
+    STARTUPINFOW si = {};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi = {};
 
-    if (!CreateProcessA(exePath, &cmdLine[0],
+    if (!CreateProcessW(exePath, &cmdLine[0],
                         nullptr, nullptr, FALSE,
                         DETACHED_PROCESS | CREATE_NO_WINDOW,
                         nullptr, nullptr, &si, &pi)) {
@@ -141,7 +144,6 @@ static int cmdStart(uint16_t localPort, uint16_t remotePort,
     return 0;
 }
 
-// ---- 幫助 ----
 // ---- 幫助 ----
 static void printUsage() {
     printf("MoLink Access - ADB USB Proxy\n\n"
@@ -186,6 +188,13 @@ static void printUsage() {
 // ---- entry ----
 int main(int argc, char* argv[]) {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    initConsole();
+
+    // 从 Windows 内核直接获取宽字符参数，绕过所有编码转换
+    auto wideArgv = getWideArgv();
+    Utf8Args utf8Args(wideArgv.argc, wideArgv.argv);
+    argc = utf8Args.argc();
+    argv = utf8Args.argv();
 
     if (argc < 2) {
         printUsage();
@@ -216,8 +225,9 @@ int main(int argc, char* argv[]) {
         }
         if (sendPipeCmd("status").empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         std::error_code ec;
-        std::string local = std::filesystem::absolute(argv[2], ec).string();
-        std::string cmd = "push " + (ec ? argv[2] : local) + " " + argv[3];
+        auto absPath = std::filesystem::absolute(std::filesystem::u8path(argv[2]), ec);
+        std::string local = ec ? argv[2] : pathToUtf8(absPath);
+        std::string cmd = "push " + local + " " + argv[3];
         auto resp = sendPipeCmd(cmd);
         printf("%s\n", resp.c_str());
         return (resp == "ok") ? 0 : 1;
@@ -230,8 +240,9 @@ int main(int argc, char* argv[]) {
         }
         if (sendPipeCmd("status").empty()) { printf("Daemon is not running. Use 'molink start' first.\n"); return 1; }
         std::error_code ec;
-        std::string local = std::filesystem::absolute(argv[3], ec).string();
-        std::string cmd = "pull " + std::string(argv[2]) + " " + (ec ? argv[3] : local);
+        auto absPath = std::filesystem::absolute(std::filesystem::u8path(argv[3]), ec);
+        std::string local = ec ? argv[3] : pathToUtf8(absPath);
+        std::string cmd = "pull " + std::string(argv[2]) + " " + local;
         auto resp = sendPipeCmd(cmd);
         printf("%s\n", resp.c_str());
         return (resp == "ok") ? 0 : 1;

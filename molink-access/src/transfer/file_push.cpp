@@ -1,7 +1,8 @@
-﻿#include "file_push.h"
+#include "file_push.h"
 #include "../adb/adb_client.h"
 #include "../adb/adb_reader.h"
 #include "../adb/adb_sync.h"
+#include "../utils/win_utils.h"
 #include <cstdio>
 #include "log.h"
 #include <cstring>
@@ -10,7 +11,7 @@
 std::string pushFile(AdbClient& client,
                      const std::string& localPath,
                      const std::string& remotePath) {
-    FILE* f = fopen(localPath.c_str(), "rb");
+    FILE* f = fopenUtf8(localPath.c_str(), "rb");
     if (!f) {
         char buf[512];
         snprintf(buf, sizeof(buf), "fail: Local file not found: %s",
@@ -18,11 +19,13 @@ std::string pushFile(AdbClient& client,
         return buf;
     }
 
-    struct stat st;
-    if (stat(localPath.c_str(), &st) != 0) {
+    std::wstring wpath = utf8ToWide(localPath);
+    struct _stati64 st;
+    if (_wstati64(wpath.c_str(), &st) != 0) {
         fclose(f);
         return "fail: Cannot stat local file";
     }
+    uint32_t mtime = (uint32_t)st.st_mtime;
 
     auto ch = client.openChannel("sync:");
     if (!ch) {
@@ -78,7 +81,6 @@ std::string pushFile(AdbClient& client,
     LOG_INFO("PUSH", "total %lld bytes sent", totalSent);
     fclose(f);
 
-    uint32_t mtime = (uint32_t)st.st_mtime;
     {
         SyncMsg doneHdr;
         doneHdr.id = SYNC_DONE;
