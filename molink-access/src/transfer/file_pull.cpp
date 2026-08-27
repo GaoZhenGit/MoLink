@@ -3,6 +3,7 @@
 #include "../adb/adb_reader.h"
 #include "../adb/adb_sync.h"
 #include "../utils/win_utils.h"
+#include "../utils/time_utils.h"
 #include <cstdio>
 #include "log.h"
 #include <cstring>
@@ -13,6 +14,16 @@ std::string pullFile(AdbClient& client,
     auto ch = client.openChannel("sync:");
     if (!ch) {
         return "fail: Cannot open sync channel";
+    }
+
+    // 顺手查一下远端 mtime，等会儿写到本地属性里。
+    // 失败不阻断主流程（mtime 缺失时本地用当前时间）。
+    uint32_t remoteMtime = 0;
+    {
+        uint32_t mode = 0, size = 0;
+        if (syncStat(client, ch, remotePath, &mode, &size, &remoteMtime)) {
+            LOG_DEBUG("PULL", "remote mtime=%u size=%u", remoteMtime, size);
+        }
     }
 
     if (!syncRecv(client, ch, remotePath)) {
@@ -72,9 +83,13 @@ std::string pullFile(AdbClient& client,
 
     fclose(f);
 
+    // 还原 last write / last access time
     if (!error.empty()) {
         client.closeChannel(ch);
         return error;
+    }
+    if (remoteMtime != 0) {
+        timeu::setMtime(localPath, (time_t)remoteMtime);
     }
 
     SyncMsg okayHdr;

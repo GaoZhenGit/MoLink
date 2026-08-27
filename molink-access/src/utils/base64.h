@@ -5,9 +5,11 @@
 #include <vector>
 #include <cstdint>
 
+// URL-safe 字母表：用 '-' '_' 替代 '+' '/'。
+// '/' 会被 adbd 当作路径分隔符，导致 apush 上去的文件变成目录层级。
 inline std::string base64Encode(const std::string& input) {
     static const char kAlphabet[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
     std::string output;
     output.reserve(((input.size() + 2) / 3) * 4);
@@ -38,12 +40,14 @@ inline std::string base64Encode(const std::string& input) {
 }
 
 inline std::string base64Decode(const std::string& input) {
+    // 同时兼容标准字母表（'+' '/'）与 URL-safe 字母表（'-' '_'），
+    // 以便解码设备上遗留的旧编码文件名。
     static const uint8_t kDecode[128] = {
         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,62,0,0,0,63,
+        0,0,0,0,0,0,0,0,0,0,0,62,0,62,0,63,          // 43='+' 45='-' 47='/'
         52,53,54,55,56,57,58,59,60,61,0,0,0,0,0,0,
         0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
-        15,16,17,18,19,20,21,22,23,24,25,0,0,0,0,0,
+        15,16,17,18,19,20,21,22,23,24,25,0,0,0,0,63, // 95='_'
         0,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
         41,42,43,44,45,46,47,48,49,50,51,0,0,0,0,0
     };

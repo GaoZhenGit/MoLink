@@ -294,6 +294,8 @@ AUTH_RSAPUBLICKEY 公钥来源:
 | 5 | 连续请求第 3 次起失败 | closeChannel 发 A_CLSE 后不消耗设备响应，残留消息污染下次 openChannel | closeChannel 循环 recv 直到 A_CLSE | V1 |
 | 6 | 错误密码后再正确密码连不上 | 同上 + 设备 SOCKS5 worker 未重置 | closeChannel drain 不提早退出 + runLoop 加 300ms delay | V1 |
 | 7 | 并发打开通道全部失败 | openChannel 的 recv 和 AdbReader 抢 USB 读，A_OKAY 被 AdbReader 丢弃 | PendingOpen 机制：AdbReader 分发 A_OKAY 给等待者 | V2 |
+| 8 | apush 的文件在设备上变成目录 | 文件名 base64 用标准字母表，编码出的 `/` 被 adbd 当作路径分隔符 | `base64Encode` 改用 URL-safe 字母表（`-` `_`），`base64Decode` 兼容两套 | V2 |
+| 9 | apush/apull 后文件 mtime 全部丢失 | (a) 目录走 zip 时 `LocalHdr/CentralHdr.mtime=mdate=0` 写死，没有 UT 扩展；`extractZip` 完全无视 header 里的时间字段。(b) 单文件 pull 没问设备 mtime，写完本地文件后也没 `SetFileTime` | (a) `ZipWriter::addFile` 加 mtime 形参，写 DOS mtime/mdate + PKZIP UT 扩展（0x5455，flag 0x01），`extractZip` 读 UT 扩展并 `SetFileTime`。(b) 新增 `SYNC_STAT` + `syncStat()`，pull 时先 STAT 拿 mtime，写完后用 `SetFileTime` 还原 | V2 |
 
 ---
 

@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <sys/stat.h>
 #include <windows.h>
 
 namespace fs = std::filesystem;
@@ -53,15 +54,23 @@ static std::string compressFolder(const std::string& folderPath,
             continue;
         }
 
+        // 读 entry 的 last write time（zip 内用于还原 mtime）
+        uint32_t entryMtime = 0;
+        struct _stati64 st;
+        std::wstring wentry = entry.path().wstring();
+        if (_wstati64(wentry.c_str(), &st) == 0) {
+            entryMtime = (uint32_t)st.st_mtime;
+        }
+
         if (isDir) {
             std::string dirEntry = relPath + "/";
-            writer.addFile(dirEntry, nullptr, 0);
+            writer.addFile(dirEntry, nullptr, 0, entryMtime);
         } else {
             std::ifstream f(entry.path(), std::ios::binary);
             if (!f.good()) continue;
             std::string content((std::istreambuf_iterator<char>(f)),
                                  std::istreambuf_iterator<char>());
-            if (!writer.addFile(relPath, content.data(), content.size()))
+            if (!writer.addFile(relPath, content.data(), content.size(), entryMtime))
                 return "fail: Cannot add file to zip: " + relPath;
             fileCount++;
         }
