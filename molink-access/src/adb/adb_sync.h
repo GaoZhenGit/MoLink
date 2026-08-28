@@ -14,7 +14,6 @@ constexpr uint32_t SYNC_DONE = 0x454e4f44;  // "DONE"
 constexpr uint32_t SYNC_OKAY = 0x59414b4f;  // "OKAY"
 constexpr uint32_t SYNC_FAIL = 0x4c494146;  // "FAIL"
 constexpr uint32_t SYNC_QUIT = 0x54495551;  // "QUIT"
-constexpr uint32_t SYNC_STAT = 0x54415453;  // "STAT" (response carries mode/size/mtime)
 
 #pragma pack(push, 1)
 struct SyncMsg {
@@ -33,11 +32,6 @@ bool syncSend(AdbClient& client, ChannelPtr ch,
 bool syncRecv(AdbClient& client, ChannelPtr ch,
               const std::string& remotePath);
 bool syncQuit(AdbClient& client, ChannelPtr ch);
-
-// Query remote file metadata. On success populates *mode, *size, *mtime (Unix seconds).
-bool syncStat(AdbClient& client, ChannelPtr ch,
-              const std::string& remotePath,
-              uint32_t* mode, uint32_t* size, uint32_t* mtime);
 
 // Read a sync response from the channel's dataQueue.
 bool syncReadResponse(ChannelPtr ch, SyncMsg& msg,

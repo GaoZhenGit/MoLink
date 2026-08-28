@@ -98,6 +98,10 @@ int cmdApush(int argc, char* argv[]) {
     while (!path.empty() && (path.back() == '\\' || path.back() == '/'))
         path.pop_back();
 
+    // 注意：必须用去尾后的 path 取 filename，否则 `.\foo\` 这种输入会让
+    // filename() 拿到空串，最终 push 到设备的是 b64_ + 空 base64。
+    std::string originalName = fs::u8path(path).filename().u8string();
+
     std::string rdir = kRemoteDir;
 
     enum { AUTO, ENABLED, DISABLED } gitMode = AUTO;
@@ -117,7 +121,6 @@ int cmdApush(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string originalName = inputPath.filename().u8string();
     GitignoreMatcher gitSpec;
     int ignoredCount = 0;
 

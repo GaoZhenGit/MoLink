@@ -2,6 +2,7 @@
 #include "../adb/adb_client.h"
 #include "../adb/adb_reader.h"
 #include "../adb/adb_sync.h"
+#include "../adb/adb_shell.h"
 #include "../utils/win_utils.h"
 #include "../utils/time_utils.h"
 #include <cstdio>
@@ -11,20 +12,21 @@
 std::string pullFile(AdbClient& client,
                      const std::string& remotePath,
                      const std::string& localPath) {
+    // 先通过 shell: 通道取远端 mtime（独立通道，不污染 sync:）。
+    // 失败/取不到时返回 0，事后不还原（与 adb pull 默认行为对齐）。
+    uint32_t remoteMtime = getRemoteMtime(client, remotePath);
+    if (remoteMtime != 0) {
+        LOG_DEBUG("PULL", "remote mtime=%u", remoteMtime);
+    }
+
     auto ch = client.openChannel("sync:");
     if (!ch) {
         return "fail: Cannot open sync channel";
     }
 
-    // 顺手查一下远端 mtime，等会儿写到本地属性里。
-    // 失败不阻断主流程（mtime 缺失时本地用当前时间）。
-    uint32_t remoteMtime = 0;
-    {
-        uint32_t mode = 0, size = 0;
-        if (syncStat(client, ch, remotePath, &mode, &size, &remoteMtime)) {
-            LOG_DEBUG("PULL", "remote mtime=%u size=%u", remoteMtime, size);
-        }
-    }
+    // 注：上一版曾尝试用 syncStat()（走 sync: 通道）拿 mtime，但 Flyme 等
+    // 厂商的 adbd 对 STAT 响应格式不一致，导致 ch->syncBuf 残留字节错位后续帧，
+    // 整条 pull 链路卡住 60s×2（详见 molinkd.log）。改走 shell 通道后隔离干净。
 
     if (!syncRecv(client, ch, remotePath)) {
         client.closeChannel(ch);
@@ -83,11 +85,13 @@ std::string pullFile(AdbClient& client,
 
     fclose(f);
 
-    // 还原 last write / last access time
     if (!error.empty()) {
         client.closeChannel(ch);
         return error;
     }
+
+    // 还原 last write / last access time（zip 解压后内部文件的 mtime 由
+    // zip_utils.h 的 UT 扩展负责；此处只处理 .molink.zip / 单文件 自身）
     if (remoteMtime != 0) {
         timeu::setMtime(localPath, (time_t)remoteMtime);
     }
