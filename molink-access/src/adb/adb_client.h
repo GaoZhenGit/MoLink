@@ -9,6 +9,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <cstdint>
 #include <windows.h>
 
@@ -68,7 +69,9 @@ private:
     mutable std::mutex m_channelMutex;
     std::string m_serial;
     bool m_connected = false;
-    uint32_t m_nextLocalId = 1;
+    // openChannel 会被 daemon 主线程和 forwarder 的 relay 线程并发调用，
+    // 必须原子自增，否则两个线程可能拿到相同 localId 互相覆盖 pending。
+    std::atomic<uint32_t> m_nextLocalId{1};
     std::mutex m_writeMutex;
     HANDLE m_hDisconnectEvent = nullptr;
     DaemonState m_state = DaemonState::CONNECTED;

@@ -1,6 +1,7 @@
 #include "adb_client.h"
 #include "log.h"
 #include <cstdio>
+#include <chrono>
 
 // ---- Device Discovery ----
 
@@ -170,7 +171,10 @@ ChannelPtr AdbClient::openChannel(const std::string& destination) {
     bool error = false;
     {
         std::unique_lock<std::mutex> poLock(po->mtx);
-        po->cv.wait(poLock, [&] { return po->done; });
+        // 超时保护：adbd 挂起不应答 A_OPEN 时，不能把调用方（daemon 主线程）
+        // 永久卡死。超时后 remoteId 保持 0，走下方 error/remoteId==0 分支
+        // 返回 nullptr，调用方按打开失败处理。
+        po->cv.wait_for(poLock, std::chrono::seconds(30), [&] { return po->done; });
         remoteId = po->remoteId;
         error = po->error;
     }

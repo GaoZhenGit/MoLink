@@ -2,6 +2,35 @@
 #include <cstdio>
 #include <cstring>
 
+// 重新挂起连接等待。m_overlapped.hEvent 是 manual-reset 事件，必须手动复位，
+// 否则事件一直保持 signaled，daemon 主循环会空转烧掉一个核。
+static void RearmConnect(HANDLE pipe, OVERLAPPED& ov) {
+    ResetEvent(ov.hEvent);
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (ConnectNamedPipe(pipe, &ov)) {
+            SetEvent(ov.hEvent);   // 同步连接成功（罕见），视为已连接
+            return;
+        }
+        DWORD err = GetLastError();
+        if (err == ERROR_IO_PENDING) {
+            return;                // 正常：等待客户端连接
+        }
+        if (err == ERROR_PIPE_CONNECTED) {
+            SetEvent(ov.hEvent);   // 客户端在 Disconnect/Connect 窗口期连上了
+            return;
+        }
+        if (err == ERROR_NO_DATA) {
+            // 客户端在窗口期连上又立刻断开（如 CLI 被 Ctrl+C 杀掉）：
+            // 断开残留状态后重试，否则事件无人置位，daemon 管道永久失联
+            DisconnectNamedPipe(pipe);
+            continue;
+        }
+        printf("PIPE: ConnectNamedPipe failed: %lu\n", err);
+        return;
+    }
+    printf("PIPE: ConnectNamedPipe keeps failing, giving up\n");
+}
+
 NamedPipeServer::NamedPipeServer(const std::string& pipeName)
     : m_pipeName(pipeName) {
     memset(&m_overlapped, 0, sizeof(m_overlapped));
@@ -60,7 +89,7 @@ void NamedPipeServer::processConnection() {
         if (err != ERROR_IO_INCOMPLETE) {
             // 连接失败，重建
             DisconnectNamedPipe(m_pipe);
-            ConnectNamedPipe(m_pipe, &m_overlapped);
+            RearmConnect(m_pipe, m_overlapped);
         }
         return;
     }
@@ -86,7 +115,7 @@ void NamedPipeServer::processConnection() {
 
     FlushFileBuffers(m_pipe);
     DisconnectNamedPipe(m_pipe);
-    ConnectNamedPipe(m_pipe, &m_overlapped);
+    RearmConnect(m_pipe, m_overlapped);
 }
 
 void NamedPipeServer::stop() {

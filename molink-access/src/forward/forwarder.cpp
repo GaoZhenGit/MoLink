@@ -64,6 +64,12 @@ void Forwarder::stop() {
     if (m_thread.joinable()) {
         m_thread.join();
     }
+    // 等所有 relay 结束再返回（openChannel/send 均有超时兜底，最坏 ~30s），
+    // 保证析构时没有线程还在访问 this。
+    for (auto& e : m_relays) {
+        if (e.thread.joinable()) e.thread.join();
+    }
+    m_relays.clear();
     if (m_wsaStarted) {
         WSACleanup();
         m_wsaStarted = false;
@@ -121,11 +127,37 @@ void Forwarder::acceptLoop() {
         }
 
         LOG_INFO("FWD", "client connected (%d active)", m_activeCount);
-        std::thread(&Forwarder::relay, this, clientSock).detach();
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        m_relays.push_back(RelayEntry{
+            std::thread(&Forwarder::relay, this, clientSock, done), done});
+        reapFinishedRelays();
     }
 }
 
-void Forwarder::relay(SOCKET clientSock) {
+void Forwarder::relay(SOCKET clientSock,
+                      std::shared_ptr<std::atomic<bool>> done) {
+    relayImpl(clientSock);
+    *done = true;
+}
+
+void Forwarder::reapFinishedRelays() {
+    for (auto it = m_relays.begin(); it != m_relays.end();) {
+        if (it->done->load() && it->thread.joinable()) {
+            it->thread.join();
+            it = m_relays.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void Forwarder::relayImpl(SOCKET clientSock) {
+    // 限制阻塞 send 的时长：客户端停住接收时，不能让 relay 线程（以及
+    // stop() 的 join）无限期卡住。
+    int sndTimeout = 30000;
+    setsockopt(clientSock, SOL_SOCKET, SO_SNDTIMEO,
+               (const char*)&sndTimeout, sizeof(sndTimeout));
+
     std::string dest = "tcp:" + std::to_string(m_remotePort);
 
     auto ch = m_client.openChannel(dest);
